@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import {
   categories,
+  QUICK_CHAT_SEARCH_TIMEOUT_MS,
   type User,
   type Room,
   type Message,
@@ -293,6 +294,7 @@ export function App() {
   const ws = useRef<Realtime | null>(null),
     activeRef = useRef<any>(null),
     userRef = useRef<User | null>(null),
+    queueStartedAt = useRef<number | null>(null),
     statusRef = useRef(status),
     actionRef = useRef<(e: any) => void>(() => {}),
     acks = useRef(
@@ -375,6 +377,7 @@ export function App() {
     activeRef.current = room;
     setMessages(result.messages);
     setMessageNext(result.next);
+    queueStartedAt.current = null;
     setQueue(false);
     setDraft("");
     setReply(null);
@@ -645,14 +648,38 @@ export function App() {
   }, [active?.id, connected]);
   useEffect(() => {
     if (!queue) return;
-    const t = setInterval(
-      () =>
-        background(async () => {
-          const result = await api("/match", "POST", {});
-          if (result.roomId) await openRoom(result.roomId);
-        }),
-      5000,
-    );
+    const startedAt = (queueStartedAt.current ??= Date.now());
+    let polling = false;
+    const timeoutSearch = async () => {
+      if (queueStartedAt.current !== startedAt) return;
+      queueStartedAt.current = null;
+      setQueue(false);
+      try {
+        await api("/match", "DELETE");
+      } catch {}
+      if (!activeRef.current)
+        notify("No one was available this time. You can try again.");
+    };
+    const poll = async () => {
+      if (polling || queueStartedAt.current !== startedAt) return;
+      polling = true;
+      try {
+        if (Date.now() - startedAt >= QUICK_CHAT_SEARCH_TIMEOUT_MS) {
+          await timeoutSearch();
+          return;
+        }
+        const result = await api("/match", "POST", {});
+        if (queueStartedAt.current !== startedAt) return;
+        if (result.roomId) await openRoom(result.roomId);
+        else if (result.timedOut) await timeoutSearch();
+      } catch (e) {
+        if (queueStartedAt.current === startedAt)
+          notify((e as Error).message, true);
+      } finally {
+        polling = false;
+      }
+    };
+    const t = setInterval(() => void poll(), 5000);
     return () => clearInterval(t);
   }, [queue]);
   useEffect(() => {
@@ -1219,9 +1246,13 @@ export function App() {
       setMobileNav(false);
       await loadSocial();
       await heartbeat();
+      queueStartedAt.current = Date.now();
       const r = await api("/match", "POST", {});
       if (r.roomId) await openRoom(r.roomId);
-      else {
+      else if (r.timedOut) {
+        queueStartedAt.current = null;
+        notify("No one was available this time. You can try again.");
+      } else {
         setQueue(true);
         notify("Looking for someone new…");
       }
@@ -1233,14 +1264,19 @@ export function App() {
     }
     act(async () => {
       if (queue) {
-        await api("/match", "DELETE");
+        queueStartedAt.current = null;
         setQueue(false);
+        await api("/match", "DELETE");
         return;
       }
       await heartbeat();
+      queueStartedAt.current = Date.now();
       const result = await api("/match", "POST", {});
       if (result.roomId) await openRoom(result.roomId);
-      else setQueue(true);
+      else if (result.timedOut) {
+        queueStartedAt.current = null;
+        notify("No one was available this time. You can try again.");
+      } else setQueue(true);
     });
   };
   const isOwner =

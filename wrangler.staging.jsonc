@@ -1,0 +1,65 @@
+{
+  "name": "charoo-live-staging",
+  "main": "./celld/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/health"],
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOM", "class_name": "Room" },
+      { "name": "APP", "class_name": "AppCoordinator" },
+      { "name": "MATCHER", "class_name": "Matcher" },
+      { "name": "USER_HUB", "class_name": "UserHub" },
+      { "name": "DISCOVERY", "class_name": "Discovery" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiter" },
+    ],
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Room"] },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "AppCoordinator",
+        "Matcher",
+        "UserHub",
+        "Discovery",
+        "RateLimiter",
+      ],
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "charoo-d1-staging",
+      "database_id": "9f7cb190-2814-4fe1-acd9-02f9a37393de",
+      "migrations_dir": "celld/migrations",
+    },
+  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "charoo-media-staging" }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "charoo-jobs-staging" }],
+    "consumers": [
+      {
+        "queue": "charoo-jobs-staging",
+        "max_batch_size": 10,
+        "max_retries": 5,
+        "dead_letter_queue": "charoo-jobs-staging-dead-letter",
+      },
+    ],
+  },
+  "triggers": { "crons": ["* * * * *"] },
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": false }],
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "account_id": "ab45524ac8e5dd8e2d2a45c5949f018a",
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "NODE_ENV": "production",
+    "WEB_ORIGIN": "https://charoo-live-staging.shy-star-eff8.workers.dev",
+    "TRUSTED_CLIENT_IP_HEADER": "CF-Connecting-IP",
+  },
+  "secrets": { "required": ["MESSAGE_KEY"] },
+}

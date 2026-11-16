@@ -4,6 +4,7 @@ node_modules/
 .wrangler.deploy.jsonc
 .wrangler/
 .secrets.cloudflare.json
+.secrets.cloudflare.staging.json
 .celld/
 coverage/
 dist/

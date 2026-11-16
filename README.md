@@ -152,6 +152,21 @@ The assistant sends a bounded style prompt without conversation history. LiveKit
 
 `wrangler.cloudflare.jsonc` deploys the `charoo-live` Worker with its Durable Objects to Cloudflare, using the existing `charoo-d1-db` D1 database and `charoo-media` R2 bucket. The browser origin is **https://charoo-live.shy-star-eff8.workers.dev**; `vars.WEB_ORIGIN` must match it exactly. This configuration is separate from local Celld development and the fleet deployment below.
 
+### Staging
+
+`wrangler.staging.jsonc` deploys an isolated `charoo-live-staging` Worker. It uses a separate D1 database, R2 bucket, queues and Durable Object namespaces from production. Its browser origin is **https://charoo-live-staging.shy-star-eff8.workers.dev**. The staging `MESSAGE_KEY` is stored separately in the ignored `.secrets.cloudflare.staging.json`; retain a secure backup and never reuse the production key.
+
+The staging resources are provisioned in the configured Cloudflare account. Apply its D1 migrations and check the Worker bundle before deploying it:
+
+```sh
+pnpm run db:migrate:cloudflare:staging
+pnpm run deploy:cloudflare:staging:dry-run
+pnpm build:cloudflare:staging
+pnpm exec wrangler deploy --config wrangler.staging.jsonc --secrets-file .secrets.cloudflare.staging.json
+```
+
+Later staging deployments can use `pnpm run deploy:cloudflare:staging`. Provider integrations remain unavailable until their staging credentials and nonsecret settings are configured. Use staging data only; the current implementation review lists open access-control findings.
+
 `pnpm run build:cloudflare` uses the public production settings from that configuration for the generated security headers, including LiveKit connection origins when configured. The secrets file is only passed to Wrangler for upload.
 
 Create the `charoo-jobs` and `charoo-jobs-dead-letter` queues once if they do not already exist, then apply the D1 migrations before deployment:

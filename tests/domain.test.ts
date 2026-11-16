@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fixture } from "./runtime";
 import { unwrap } from "../celld/shared/errors";
 import { roomStub, iso } from "../celld/shared/data";
 import { hash } from "../celld/shared/crypto";
+import { QUICK_CHAT_SEARCH_TIMEOUT_MS } from "@charoo/contracts";
 
 describe("Durable authorities and coordination", () => {
   it("keeps invitation navigation on email credentials and allows a valid credential to upgrade an expired guest", async () => {
@@ -404,6 +405,70 @@ describe("Durable authorities and coordination", () => {
       unwrap(await roomStub(f.env, matched.roomId).command(a.actor, "leave"));
     await matcher.match(a.actor);
     expect(unwrap(await matcher.match(b.actor))).toEqual({ queued: true });
+  });
+  it("expires a quick-chat search and lets the user start a fresh one", async () => {
+    const f = await fixture(),
+      a = await f.guest(),
+      matcher = f.matcher.getByName("charoo");
+    const start = Date.now();
+    let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const hub = f.env.USER_HUB.getByName(a.actor.userId) as any;
+    hub.presence = async () => ({ status: "Online", availableExpires: false });
+    try {
+      expect(unwrap(await matcher.match(a.actor))).toEqual({ queued: true });
+      now = start + QUICK_CHAT_SEARCH_TIMEOUT_MS;
+      expect(unwrap(await matcher.match(a.actor))).toEqual({ timedOut: true });
+      expect((await matcher.status()).queue).toBe(0);
+      expect(unwrap(await matcher.match(a.actor))).toEqual({ queued: true });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+  it("does not reserve a match after a queued candidate's deadline", async () => {
+    const f = await fixture(),
+      a = await f.guest(),
+      b = await f.guest(),
+      matcher = f.matcher.getByName("charoo");
+    const start = Date.now();
+    let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const aHub = f.env.USER_HUB.getByName(a.actor.userId) as any;
+    const bHub = f.env.USER_HUB.getByName(b.actor.userId) as any;
+    bHub.presence = async () => ({ status: "Online", availableExpires: false });
+    aHub.presence = async () => ({ status: "Online", availableExpires: false });
+    const app = f.apps.getByName("charoo") as any;
+    const reserveMatch = app.reserveMatch.bind(app);
+    let receivedDeadline = 0;
+    app.reserveMatch = async (
+      userA: string,
+      userB: string,
+      deadline: number,
+    ) => {
+      receivedDeadline = deadline;
+      now = deadline + 1;
+      return reserveMatch(userA, userB, deadline);
+    };
+    try {
+      expect(unwrap(await matcher.match(a.actor))).toEqual({ queued: true });
+      now = start + QUICK_CHAT_SEARCH_TIMEOUT_MS - 100;
+      await matcher.heartbeat(a.actor.userId);
+      expect(unwrap(await matcher.match(b.actor))).toEqual({ queued: true });
+      expect(receivedDeadline).toBe(start + QUICK_CHAT_SEARCH_TIMEOUT_MS);
+      expect(
+        (await f.db.prepare("SELECT * FROM active_matches").all()).results,
+      ).toHaveLength(0);
+      expect(
+        f.matcher.states
+          .get("charoo")!
+          .database.prepare(
+            "SELECT user_id FROM charoo_waiting ORDER BY user_id",
+          )
+          .all(),
+      ).toEqual([{ user_id: b.actor.userId }]);
+    } finally {
+      clock.mockRestore();
+    }
   });
   it("requeues quick chat instead of failing on a blocked match", async () => {
     const f = await fixture(),

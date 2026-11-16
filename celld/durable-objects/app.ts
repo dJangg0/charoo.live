@@ -868,7 +868,7 @@ export class AppCoordinator extends DurableObject<Env> {
       if (r) await this.deliverInternal(r.id);
     });
   }
-  async reserveMatch(a: string, b: string) {
+  async reserveMatch(a: string, b: string, expiresAt: number) {
     return this.ctx.blockConcurrencyWhile(() =>
       result(async () => {
         const env = this.env,
@@ -908,6 +908,7 @@ export class AppCoordinator extends DurableObject<Env> {
             409,
             "Recent match",
           );
+        requireThat(Date.now() < expiresAt, 409, "Match search expired");
         const id = crypto.randomUUID(),
           record = this.roomRecord(id, "STRANGER", a, { slow_mode: 0 }),
           op = `match:${id}`,

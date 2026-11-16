@@ -14,6 +14,7 @@ import {
   type Actor,
 } from "../shared/data";
 import { result, requireThat, unwrap, type Result } from "../shared/errors";
+import { QUICK_CHAT_SEARCH_TIMEOUT_MS } from "@charoo/contracts";
 export class Matcher extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -35,7 +36,9 @@ export class Matcher extends DurableObject<Env> {
   }
   async match(
     actor: Actor,
-  ): Promise<Result<{ roomId: string } | { queued: true }>> {
+  ): Promise<
+    Result<{ roomId: string } | { queued: true } | { timedOut: true }>
+  > {
     return this.ctx.blockConcurrencyWhile(() =>
       result(async () => {
         const env = this.env,
@@ -81,22 +84,55 @@ export class Matcher extends DurableObject<Env> {
               ]);
             } else unwrap(recovered);
           } else
-            await run(env, "DELETE FROM active_matches WHERE user_id=?", [u.id]);
+            await run(env, "DELETE FROM active_matches WHERE user_id=?", [
+              u.id,
+            ]);
         }
+        const now = Date.now();
+        const existingQueue = this.ctx.storage.sql
+          .exec("SELECT queued_at FROM charoo_waiting WHERE user_id=?", u.id)
+          .toArray()[0];
+        if (
+          existingQueue &&
+          now - Number(existingQueue.queued_at) >= QUICK_CHAT_SEARCH_TIMEOUT_MS
+        ) {
+          this.ctx.storage.sql.exec(
+            "DELETE FROM charoo_waiting WHERE user_id=?",
+            u.id,
+          );
+          await this.arm();
+          return { timedOut: true };
+        }
+        const queuedAt = existingQueue ? Number(existingQueue.queued_at) : now;
+        const leaseUntil = Math.min(
+          now + 90000,
+          queuedAt + QUICK_CHAT_SEARCH_TIMEOUT_MS,
+        );
         this.ctx.storage.sql.exec(
           "INSERT INTO charoo_waiting(user_id,queued_at,until) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET until=excluded.until",
           u.id,
-          Date.now(),
-          Date.now() + 90000,
+          queuedAt,
+          leaseUntil,
         );
         for (const row of this.ctx.storage.sql
           .exec(
-            "SELECT user_id FROM charoo_waiting WHERE until>? ORDER BY queued_at,user_id LIMIT 200",
-            Date.now(),
+            "SELECT user_id,queued_at FROM charoo_waiting WHERE until>? AND queued_at>? ORDER BY queued_at,user_id LIMIT 200",
+            now,
+            now - QUICK_CHAT_SEARCH_TIMEOUT_MS,
           )
           .toArray()) {
           const id = row.user_id as string;
           if (id === u.id) continue;
+          if (
+            Date.now() - Number(row.queued_at) >=
+            QUICK_CHAT_SEARCH_TIMEOUT_MS
+          ) {
+            this.ctx.storage.sql.exec(
+              "DELETE FROM charoo_waiting WHERE user_id=?",
+              id,
+            );
+            continue;
+          }
           if ((await hub(env, id).presence()).status === "Offline") {
             this.ctx.storage.sql.exec(
               "DELETE FROM charoo_waiting WHERE user_id=?",
@@ -104,8 +140,30 @@ export class Matcher extends DurableObject<Env> {
             );
             continue;
           }
-          const reservation = await coordinator(env).reserveMatch(u.id, id);
+          const expiresAt =
+            Math.min(queuedAt, Number(row.queued_at)) +
+            QUICK_CHAT_SEARCH_TIMEOUT_MS;
+          const reservation = await coordinator(env).reserveMatch(
+            u.id,
+            id,
+            expiresAt,
+          );
           if (!reservation.ok) {
+            if (Date.now() >= expiresAt) {
+              if (Date.now() >= queuedAt + QUICK_CHAT_SEARCH_TIMEOUT_MS) {
+                this.ctx.storage.sql.exec(
+                  "DELETE FROM charoo_waiting WHERE user_id=?",
+                  u.id,
+                );
+                await this.arm();
+                return { timedOut: true };
+              }
+              this.ctx.storage.sql.exec(
+                "DELETE FROM charoo_waiting WHERE user_id=?",
+                id,
+              );
+              continue;
+            }
             if (reservation.status >= 500) throw new Error(reservation.message);
             continue;
           }
@@ -116,6 +174,14 @@ export class Matcher extends DurableObject<Env> {
           );
           await this.arm();
           return reservation.value;
+        }
+        if (Date.now() >= queuedAt + QUICK_CHAT_SEARCH_TIMEOUT_MS) {
+          this.ctx.storage.sql.exec(
+            "DELETE FROM charoo_waiting WHERE user_id=?",
+            u.id,
+          );
+          await this.arm();
+          return { timedOut: true };
         }
         await this.arm();
         return { queued: true };
@@ -140,11 +206,25 @@ export class Matcher extends DurableObject<Env> {
     await this.arm();
   }
   async heartbeat(id: string) {
-    this.ctx.storage.sql.exec(
-      "UPDATE charoo_waiting SET until=? WHERE user_id=?",
-      Date.now() + 90000,
-      id,
-    );
+    const row = this.ctx.storage.sql
+      .exec("SELECT queued_at FROM charoo_waiting WHERE user_id=?", id)
+      .toArray()[0];
+    const now = Date.now();
+    if (row && now - Number(row.queued_at) >= QUICK_CHAT_SEARCH_TIMEOUT_MS) {
+      this.ctx.storage.sql.exec(
+        "DELETE FROM charoo_waiting WHERE user_id=?",
+        id,
+      );
+    } else if (row) {
+      this.ctx.storage.sql.exec(
+        "UPDATE charoo_waiting SET until=? WHERE user_id=?",
+        Math.min(
+          now + 90000,
+          Number(row.queued_at) + QUICK_CHAT_SEARCH_TIMEOUT_MS,
+        ),
+        id,
+      );
+    }
     await this.arm();
   }
   private async arm() {

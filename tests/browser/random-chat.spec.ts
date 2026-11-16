@@ -54,3 +54,36 @@ test("Next leaves the current random chat and queues a new match", async ({
   expect(operations).toEqual(["match", "leave", "match"]);
   await expect(page.locator(".chat")).toHaveCount(0);
 });
+
+test("quick-chat cancels its queue after two minutes", async ({
+  page,
+  context,
+}) => {
+  await page.clock.install({ time: new Date("2026-11-16T00:00:00Z") });
+  await visualFixture(context);
+  const operations: string[] = [];
+  await page.route("**/api/match", (route) => {
+    if (route.request().method() === "DELETE") {
+      operations.push("cancel");
+      return route.fulfill({ status: 204 });
+    }
+    operations.push("match");
+    return route.fulfill({ json: { queued: true } });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Quick chat", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Find a conversation" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Finding a conversation…", exact: true }),
+  ).toBeVisible();
+
+  await page.clock.fastForward(125_000);
+
+  await expect(
+    page.getByText("No one was available this time. You can try again."),
+  ).toBeVisible();
+  expect(operations).toContain("cancel");
+});

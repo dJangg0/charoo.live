@@ -1,6 +1,6 @@
 # Charoo application architecture
 
-This repository implements Charoo's React application using Workers, Hono, Durable Objects, D1, R2 and Queues. Production uses Cloudflare through `wrangler.cloudflare.jsonc`; Celld 0.6.1 remains the local development path and an optional fleet hosting target through `wrangler.jsonc`.
+This repository implements Charoo's React application using Workers, Hono, Durable Objects, D1, R2 and Queues. Cloudflare production and isolated staging use `wrangler.cloudflare.jsonc` and `wrangler.staging.jsonc`; Celld 0.6.1 remains the local development path and an optional fleet hosting target through `wrangler.jsonc`.
 
 Read [SRS.md](./SRS.md) for the current product and implementation contract and [AGENTS.md](./AGENTS.md) for agent continuity. The detailed Celld fleet sections below describe that hosting path, not Cloudflare deployment. The original migration did not import PostgreSQL/Redis data.
 
@@ -548,7 +548,7 @@ The project does not prescribe how infrastructure supplies these values.
 
 ## 16. Wrangler
 
-There are two explicit root configurations: `wrangler.cloudflare.jsonc` for Cloudflare production and `wrangler.jsonc` for Celld development/fleet tooling. Keep their shared bindings and migration histories consistent when changing the shared runtime; preserve target-specific account, resource and environment settings.
+There are three explicit root configurations: `wrangler.cloudflare.jsonc` for Cloudflare production, `wrangler.staging.jsonc` for isolated Cloudflare staging, and `wrangler.jsonc` for Celld development/fleet tooling. Keep shared bindings and class migration sequences consistent across targets when changing the shared runtime; preserve each target's account, resource and environment settings.
 
 The root location preserves project-relative entrypoints, assets and migration paths. Both files remain free of secret values. Cloudflare receives managed secret bindings; the Celld deployment wrapper uses its separate private environment/configuration path.
 

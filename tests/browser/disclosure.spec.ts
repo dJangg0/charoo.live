@@ -96,6 +96,83 @@ test("ASL progress is shown above chat and details appear after both qualify", a
   ).toHaveCount(0);
 });
 
+test("a sent message is reconciled in its room after navigating away", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  const messageText = "A message sent before switching rooms";
+  const room = snapshot({ count: 0 });
+  let committed = false;
+  let releasePost!: () => void;
+  let markPostStarted!: () => void;
+  const postPaused = new Promise<void>((resolve) => (releasePost = resolve));
+  const postStarted = new Promise<void>(
+    (resolve) => (markPostStarted = resolve),
+  );
+  let sentMessage: any;
+
+  await page.route("**/api/match", (route) =>
+    route.fulfill({ json: { roomId: room.id } }),
+  );
+  await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
+  await page.route(`**/api/rooms/${room.id}/messages`, async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      sentMessage = {
+        id: "40000000-0000-4000-8000-000000000003",
+        roomId: room.id,
+        senderId: visualIds.user,
+        name: "You",
+        text: body.text,
+        createdAt: "2026-11-17T00:00:00.000Z",
+        clientMessageId: body.clientMessageId,
+        replyTo: null,
+        attachmentId: null,
+        reactions: {},
+      };
+      markPostStarted();
+      await postPaused;
+      committed = true;
+      return route.fulfill({ json: { id: sentMessage.id } });
+    }
+    return route.fulfill({
+      json: { messages: committed ? [sentMessage] : [], next: null },
+    });
+  });
+
+  await openQuickChat(page);
+  await page
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill(messageText);
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await postStarted;
+  await page
+    .getByRole("button", { name: "Back to rooms", exact: true })
+    .click();
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Chats", exact: true })
+    .click();
+  await page
+    .locator(".sidebar-rooms")
+    .getByRole("button", { name: "Private conversation", exact: true })
+    .click();
+  await expect(page.locator(".chat")).toBeVisible();
+  releasePost();
+
+  await page
+    .getByRole("button", { name: "Back to rooms", exact: true })
+    .click();
+  await page
+    .locator(".sidebar-rooms")
+    .getByRole("button", { name: "Coffee with friends", exact: true })
+    .click();
+  await expect(
+    page.locator(".messages .message").filter({ hasText: messageText }),
+  ).toHaveCount(1);
+});
+
 test("declining persists across reopening and sharing later needs explicit approval", async ({
   page,
   context,

@@ -1216,8 +1216,12 @@ dialog label {
   color: var(--muted);
   font-size: 9px;
 }
-.pending {
-  opacity: 0.65;
+.message.own .pending-status {
+  text-align: right;
+}
+.pending-status.text-button {
+  margin-left: auto;
+  color: var(--accent-text);
 }
 .typing {
   font-size: 10px;

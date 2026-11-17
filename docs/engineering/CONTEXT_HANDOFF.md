@@ -4,11 +4,20 @@ Sanitized summary for the latest Cloudflare staging milestone. Root [SRS.md](../
 
 | Field | Current state |
 |---|---|
-| Updated | 2026-11-16 — quick-chat timeout deadline review and local verification |
-| Repository / workspace | Charoo / `dhaka` |
-| Branch / target | `dJangg0/cloudflare-durable-objects-blueprint` / `origin/main` |
-| Starting commit | `39b3cc70ad840669207bbd71a82351683a00abd1` |
-| Objective / state | Quick-chat timeout is implemented for both targets and deployed to staging Worker version `17f1ade6-612c-4112-b9da-579472019756`. Review fixed late reservation past the deadline and added local coverage. Production remains pending OAuth configuration and credential remediation. |
+| Updated | 2026-11-17 — chat UX review and regression verification |
+| Repository / workspace | Charoo / `denver` |
+| Branch / target | `dJangg0/asl-profile-display-chat-fix` / `origin/main` |
+| Starting commit | `f9fff705664d8079f6860acc988c72914e2dfce6` |
+| Objective / state | Review optimistic message states, quoted reply previews, and the compact per-person ASL progress bar above quick-chat history. Fixed a room-switch pending-message reconciliation defect and added a browser regression. No deployment, migration or external action. Prior staging milestone notes follow below. |
+
+## Current task in denver (2026-11-17)
+
+- Screenshot showed quick-chat counts You 4/5 and Stranger 3/5. The five-each milestone was not met. Qualifying content also requires at least eight normalized characters, four distinct characters, a three-second gap and a new content fingerprint. Peer ASL remains subject to the owner's visibility preference.
+- Source review confirmed room WebSockets carry authenticated updates/typing; message writes use REST with a stable client ID, transactionally committed before durable outbox projection/event delivery. Keep this transport split.
+- Local changes: optimistic bubbles show `Sending…`, become `Sent` pending authoritative history refresh, and offer retry only after a failed write; post-ack history refresh is background work. Refresh now targets the room that accepted the message and reconciles pending IDs when a room is reopened. Reply history includes a privacy-checked quoted message preview. Quick-chat progress is a compact two-person bar above history, with counts to five each; permitted age/sex/location appears after qualification.
+- `pnpm typecheck`, `git diff --check`, and all 10 `tests/browser/disclosure.spec.ts` scenarios pass, including the delayed-send room-switch and quoted-reply regressions. Other Vitest/browser suites, responsive follow-up, Cloudflare runtime, deployment and migration were not run. Changes remain uncommitted; no remote action was performed.
+
+## Earlier staging milestone (2026-11-16)
 
 ## Delivered
 

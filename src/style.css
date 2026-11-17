@@ -1190,7 +1190,30 @@ dialog label {
   color: var(--muted);
   padding: 1px;
 }
-.reply-preview {
+.message-quote {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding-left: 9px;
+  border-left: 2px solid currentColor;
+  opacity: 0.78;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.message-quote strong {
+  font-size: 10px;
+}
+.message-quote span {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+}
+.pending-status {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
   font-size: 9px;
 }
 .pending {

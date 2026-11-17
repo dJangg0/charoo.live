@@ -465,3 +465,52 @@ test("a rejected picture upload keeps the existing picture and allows retry", as
   await expect(page.getByAltText("Your private profile picture")).toBeVisible();
   await expect(page.getByLabel("Replace profile picture")).toBeEnabled();
 });
+
+test("message history displays the quoted sender and reply text", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  await page.route(`**/api/rooms/${visualIds.group}/messages`, (route) =>
+    route.fulfill({
+      json: {
+        messages: [
+          {
+            id: "40000000-0000-4000-8000-000000000004",
+            roomId: visualIds.group,
+            senderId: visualIds.user,
+            name: "Cora Lane",
+            text: "That sounds good to me.",
+            createdAt: "2026-11-17T00:00:00.000Z",
+            clientMessageId: "50000000-0000-4000-8000-000000000004",
+            replyTo: "40000000-0000-4000-8000-000000000003",
+            replyPreview: {
+              id: "40000000-0000-4000-8000-000000000003",
+              senderId: visualIds.peer,
+              name: "Milo Hart",
+              text: "Would you like to meet at the coffee shop?",
+            },
+            attachmentId: null,
+            reactions: {},
+          },
+        ],
+        next: null,
+      },
+    }),
+  );
+  await page.goto("/");
+  await page
+    .locator(".sidebar-rooms")
+    .getByRole("button", { name: "Coffee with friends", exact: true })
+    .click();
+
+  const message = page
+    .locator(".messages .message")
+    .filter({ hasText: "That sounds good to me." });
+  await expect(message.locator(".message-quote strong")).toHaveText(
+    "Milo Hart",
+  );
+  await expect(message.locator(".message-quote span")).toHaveText(
+    "Would you like to meet at the coffee shop?",
+  );
+});

@@ -2487,12 +2487,18 @@ export function App() {
                           })}
                         </small>
                       </span>
-                      {m.replyTo && (
-                        <small className="reply-preview">
-                          Replying to an earlier message
-                        </small>
-                      )}
                       <div className="message-bubble">
+                        {m.replyTo && (
+                          <div className="message-quote">
+                            <strong>
+                              {m.replyPreview?.name || "Original message"}
+                            </strong>
+                            <span>
+                              {m.replyPreview?.text ||
+                                "Original message unavailable."}
+                            </span>
+                          </div>
+                        )}
                         {m.text}
                         {m.attachmentId && (
                           <button
@@ -2611,7 +2617,11 @@ export function App() {
                   )}
                   {reply && (
                     <div className="reply-bar">
-                      Replying to: {reply.text.slice(0, 80)}
+                      Replying to{" "}
+                      {reply.senderId === user?.id
+                        ? "your message"
+                        : reply.name}
+                      : {reply.text.slice(0, 80)}
                       <button
                         type="button"
                         onClick={() => setReply(null)}

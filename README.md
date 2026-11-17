@@ -152,6 +152,14 @@ The assistant sends a bounded style prompt without conversation history. LiveKit
 
 `wrangler.cloudflare.jsonc` deploys the `charoo-live` Worker with its Durable Objects to Cloudflare, using the existing `charoo-d1-db` D1 database and `charoo-media` R2 bucket. The browser origin is **https://charoo-live.shy-star-eff8.workers.dev**; `vars.WEB_ORIGIN` must match it exactly. This configuration is separate from local Celld development and the fleet deployment below.
 
+### Pull request previews
+
+Configure the connected Cloudflare Worker Build with build command `pnpm run build:cloudflare` and deploy command `pnpm run preview:cloudflare`. The deploy script explicitly selects `wrangler.cloudflare.jsonc`; a bare `wrangler preview` can select the default `wrangler.jsonc` instead. Set these commands under **Workers & Pages → charoo-live → Settings → Builds**.
+
+The `previews` bindings in `wrangler.cloudflare.jsonc` keep PR code off production D1 and R2. Each Preview receives isolated Durable Object storage; previews share the staging D1 and media bucket. The Preview queue producer points to the staging dead-letter queue so staging's normal job consumer does not run Preview jobs. Use synthetic data in these shared staging resources. Queue consumers and cron triggers do not run inside Worker Previews.
+
+Worker Previews do not inherit production secrets. Add a dedicated synthetic-data Preview base secret for `MESSAGE_KEY` with `pnpm exec wrangler preview base-config secret put MESSAGE_KEY --config wrangler.cloudflare.jsonc`; do not reuse the production or staging key. `PREVIEW_MODE` is enabled only in the `previews` block and accepts browser requests only when their Origin exactly matches the current Preview request origin. The Preview's configured `WEB_ORIGIN` is the staging URL, so API-generated absolute links still point to staging; provider sign-in and email are not configured for PR Previews.
+
 ### Staging
 
 `wrangler.staging.jsonc` deploys an isolated `charoo-live-staging` Worker. It uses a separate D1 database, R2 bucket, queues and Durable Object namespaces from production. Its browser origin is **https://charoo-live-staging.shy-star-eff8.workers.dev**. The staging `MESSAGE_KEY` is stored separately in the ignored `.secrets.cloudflare.staging.json`; retain a secure backup and never reuse the production key.

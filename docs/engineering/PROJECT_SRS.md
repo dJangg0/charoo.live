@@ -5,7 +5,7 @@ Initialized **2026-11-12** from the supplied Guardian SRS template, adapted to t
 | Field | Baseline |
 |---|---|
 | Product | Temporary conversations, shared rooms and persistent contacts |
-| Documentation scope | Repository skill/workflow setup; subsequent FR-12 quick-chat disclosure requirements and authorized implementation |
+| Documentation scope | Repository skill/workflow setup; FR-12 quick-chat disclosure, and authorized FR-05/FR-12 chat UX updates |
 | Source examined | `8de390733d421b78f71aaf1f30974ba0f7382c65`; setup edits described in the handoff |
 | Requirements and flags | [SRS status and scope](../../SRS.md#status-and-scope); retain its presence, configuration, target, policy, gap and issue distinctions |
 | Architecture | [ARCHITECTURE.md](../../ARCHITECTURE.md), [SRS decisions](../../SRS.md#architecture-decisions), [decision log](ARCHITECTURE_DECISIONS.md) |
@@ -19,7 +19,7 @@ Confirmed product scope is in [SRS functional requirements](../../SRS.md#functio
 
 The [end-to-end flows](../../SRS.md#end-to-end-application-flows) cover entry/authentication, room creation/joining, authorized messaging, matching/relationships, moderation and expiry. Providers and flags gate discovery, email, Google, room attachments, video and assistant functionality (FR-03, FR-09). Reconnect creation/acceptance is unavailable (FR-06 / GAP-01); consent is not verified age or identity (FR-01).
 
-The initial skill setup and FR-12 specification update were documentation only. The subsequent user request explicitly authorizes implementing FR-12 locally across source, contracts, migration, UI and tests. No remote migration, deployment, push or PR publication is part of that request.
+The initial skill setup and FR-12 specification update were documentation only. A subsequent user request explicitly authorized implementing FR-12 locally across source, contracts, migration, UI and tests. Later requests authorize local FR-05/FR-12 chat UX changes: optimistic message presentation, reply references, and a compact two-person progress display above the quick-chat history. No remote migration, deployment, push or PR publication is authorized by these requests.
 
 ## Requirements, invariants and acceptance criteria
 

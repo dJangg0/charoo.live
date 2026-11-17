@@ -1077,6 +1077,54 @@ dialog label {
   flex: 1;
   min-height: 0;
 }
+.quick-chat-progress {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 10px 30px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.quick-chat-progress-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+}
+.quick-chat-progress-heading strong {
+  font-size: 11px;
+}
+.quick-chat-progress-heading span,
+.quick-chat-progress-label {
+  color: var(--muted);
+  font-size: 10px;
+}
+.quick-chat-progress-people {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(100px, 1fr));
+  gap: 20px;
+  width: min(100%, 420px);
+}
+.quick-chat-progress-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.quick-chat-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+.quick-chat-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 180ms ease-out;
+}
 .chat-welcome {
   text-align: center;
   margin: 20px 0 40px;
@@ -1108,21 +1156,18 @@ dialog label {
 .quick-chat-disclosure p:last-child {
   margin-bottom: 0;
 }
-.disclosure-progress,
 .picture-sharing-milestone {
   display: flex;
   align-items: flex-start;
   gap: 9px;
 }
-.disclosure-progress > svg,
 .picture-sharing-milestone > svg {
   flex-shrink: 0;
   margin-top: 3px;
   color: var(--accent-text);
 }
-.disclosure-hint {
-  color: var(--muted);
-  font-size: 12px;
+.disclosure-asl {
+  overflow-wrap: anywhere;
 }
 .picture-sharing-notice {
   border-top: 1px solid var(--line);
@@ -1208,11 +1253,38 @@ dialog label {
   color: var(--muted);
   padding: 1px;
 }
-.reply-preview {
+.message-quote {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding-left: 9px;
+  border-left: 2px solid currentColor;
+  opacity: 0.78;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.message-quote strong {
+  font-size: 10px;
+}
+.message-quote span {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+}
+.pending-status {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
   font-size: 9px;
 }
-.pending {
-  opacity: 0.65;
+.message.own .pending-status {
+  text-align: right;
+}
+.pending-status.text-button {
+  margin-left: auto;
+  color: var(--accent-text);
 }
 .typing {
   font-size: 10px;
@@ -5290,6 +5362,22 @@ canvas {
   }
 }
 @media (max-width: 640px) {
+  .quick-chat-progress {
+    gap: 10px;
+    padding: 8px 14px;
+  }
+  .quick-chat-progress-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .quick-chat-progress-heading span {
+    font-size: 9px;
+  }
+  .quick-chat-progress-people {
+    gap: 12px;
+    width: min(100%, 300px);
+  }
   .chat:has(.quick-chat-disclosure) .chat-head {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -5300,5 +5388,19 @@ canvas {
   .chat:has(.quick-chat-disclosure) .chat-head > .button {
     padding: 8px 10px;
     font-size: 11px;
+  }
+}
+@media (max-width: 400px) {
+  .quick-chat-progress {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .quick-chat-progress-heading {
+    align-items: baseline;
+    flex-direction: row;
+    width: 100%;
+  }
+  .quick-chat-progress-people {
+    width: 100%;
   }
 }

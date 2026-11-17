@@ -54,7 +54,7 @@ async function openQuickChat(page: Page) {
   await expect(page.locator(".chat")).toBeVisible();
 }
 
-test("ASL progress is per person and picture invitation waits for ten each", async ({
+test("ASL progress is shown above chat and details appear after both qualify", async ({
   page,
   context,
 }) => {
@@ -66,9 +66,15 @@ test("ASL progress is per person and picture invitation waits for ten each", asy
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
   await openQuickChat(page);
-  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
-  await expect(sharing).toContainText("You 4/5 · Stranger 5/5");
-  await expect(sharing).not.toContainText("Picture sharing is now available.");
+  const progress = page.getByLabel("ASL reveal progress", { exact: true });
+  await expect(progress).toContainText("5 qualifying messages each");
+  await expect(progress).toContainText(/You\s*4\/5/);
+  await expect(progress).toContainText(/Stranger\s*5\/5/);
+  await expect(page.getByRole("progressbar", { name: "You" })).toHaveAttribute(
+    "aria-valuenow",
+    "4",
+  );
+  await expect(page.locator(".quick-chat-disclosure")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toHaveCount(0);
@@ -79,11 +85,92 @@ test("ASL progress is per person and picture invitation waits for ten each", asy
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("A new hello for you");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(sharing).toContainText("ASL milestone reached.");
-  await expect(sharing).toContainText("Age 31 · Woman · Manila");
+  await expect(progress).toHaveCount(0);
+  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
+  await expect(sharing).toContainText(
+    "Stranger: Age 31 · Sex Woman · Location Manila",
+  );
+  await expect(sharing).not.toContainText(/\d\/5/);
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toHaveCount(0);
+});
+
+test("a sent message is reconciled in its room after navigating away", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  const messageText = "A message sent before switching rooms";
+  const room = snapshot({ count: 0 });
+  let committed = false;
+  let releasePost!: () => void;
+  let markPostStarted!: () => void;
+  const postPaused = new Promise<void>((resolve) => (releasePost = resolve));
+  const postStarted = new Promise<void>(
+    (resolve) => (markPostStarted = resolve),
+  );
+  let sentMessage: any;
+
+  await page.route("**/api/match", (route) =>
+    route.fulfill({ json: { roomId: room.id } }),
+  );
+  await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
+  await page.route(`**/api/rooms/${room.id}/messages`, async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      sentMessage = {
+        id: "40000000-0000-4000-8000-000000000003",
+        roomId: room.id,
+        senderId: visualIds.user,
+        name: "You",
+        text: body.text,
+        createdAt: "2026-11-17T00:00:00.000Z",
+        clientMessageId: body.clientMessageId,
+        replyTo: null,
+        attachmentId: null,
+        reactions: {},
+      };
+      markPostStarted();
+      await postPaused;
+      committed = true;
+      return route.fulfill({ json: { id: sentMessage.id } });
+    }
+    return route.fulfill({
+      json: { messages: committed ? [sentMessage] : [], next: null },
+    });
+  });
+
+  await openQuickChat(page);
+  await page
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill(messageText);
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await postStarted;
+  await page
+    .getByRole("button", { name: "Back to rooms", exact: true })
+    .click();
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Chats", exact: true })
+    .click();
+  await page
+    .locator(".sidebar-rooms")
+    .getByRole("button", { name: "Private conversation", exact: true })
+    .click();
+  await expect(page.locator(".chat")).toBeVisible();
+  releasePost();
+
+  await page
+    .getByRole("button", { name: "Back to rooms", exact: true })
+    .click();
+  await page
+    .locator(".sidebar-rooms")
+    .getByRole("button", { name: "Coffee with friends", exact: true })
+    .click();
+  await expect(
+    page.locator(".messages .message").filter({ hasText: messageText }),
+  ).toHaveCount(1);
 });
 
 test("declining persists across reopening and sharing later needs explicit approval", async ({
@@ -454,4 +541,53 @@ test("a rejected picture upload keeps the existing picture and allows retry", as
   );
   await expect(page.getByAltText("Your private profile picture")).toBeVisible();
   await expect(page.getByLabel("Replace profile picture")).toBeEnabled();
+});
+
+test("message history displays the quoted sender and reply text", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  await page.route(`**/api/rooms/${visualIds.group}/messages`, (route) =>
+    route.fulfill({
+      json: {
+        messages: [
+          {
+            id: "40000000-0000-4000-8000-000000000004",
+            roomId: visualIds.group,
+            senderId: visualIds.user,
+            name: "Cora Lane",
+            text: "That sounds good to me.",
+            createdAt: "2026-11-17T00:00:00.000Z",
+            clientMessageId: "50000000-0000-4000-8000-000000000004",
+            replyTo: "40000000-0000-4000-8000-000000000003",
+            replyPreview: {
+              id: "40000000-0000-4000-8000-000000000003",
+              senderId: visualIds.peer,
+              name: "Milo Hart",
+              text: "Would you like to meet at the coffee shop?",
+            },
+            attachmentId: null,
+            reactions: {},
+          },
+        ],
+        next: null,
+      },
+    }),
+  );
+  await page.goto("/");
+  await page
+    .locator(".sidebar-rooms")
+    .getByRole("button", { name: "Coffee with friends", exact: true })
+    .click();
+
+  const message = page
+    .locator(".messages .message")
+    .filter({ hasText: "That sounds good to me." });
+  await expect(message.locator(".message-quote strong")).toHaveText(
+    "Milo Hart",
+  );
+  await expect(message.locator(".message-quote span")).toHaveText(
+    "Would you like to meet at the coffee shop?",
+  );
 });

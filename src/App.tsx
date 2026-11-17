@@ -3,7 +3,7 @@ import { RoomSidebar } from "./RoomSidebar";
 import { JoinRoomForm } from "./JoinRoomForm";
 import { ThemeSettings } from "./ThemeSettings";
 import { ProfilePicture } from "./ProfilePicture";
-import { QuickChatDisclosure } from "./QuickChatDisclosure";
+import { QuickChatDisclosure, QuickChatProgress } from "./QuickChatDisclosure";
 import { useTheme } from "./useTheme";
 import {
   useEffect,
@@ -373,6 +373,7 @@ export function App() {
     setMobileNav(false);
     const room = await api(`/rooms/${id}`),
       result = await api(`/rooms/${id}/messages`);
+    reconcilePending(id, result.messages);
     setActive(room);
     activeRef.current = room;
     setMessages(result.messages);
@@ -386,14 +387,26 @@ export function App() {
       ws.current.send(JSON.stringify({ type: "subscribe", roomId: id }));
     await api(`/rooms/${id}/read`, "POST", {});
   }
-  async function refreshChat() {
-    const room = activeRef.current;
+  function reconcilePending(roomId: string, messages: Message[]) {
+    const confirmedIds = new Set(
+      messages.map((message) => message.clientMessageId),
+    );
+    setPending((items) =>
+      items.filter(
+        (item) =>
+          item.roomId !== roomId || !confirmedIds.has(item.clientMessageId),
+      ),
+    );
+  }
+  async function refreshChat(roomId?: string) {
+    const room = roomId ? { id: roomId } : activeRef.current;
     if (!room) return;
     try {
       const [data, meta] = await Promise.all([
         api(`/rooms/${room.id}/messages`),
         api(`/rooms/${room.id}`),
       ]);
+      reconcilePending(room.id, data.messages);
       if (activeRef.current?.id !== room.id) return;
       setMessages(data.messages);
       setMessageNext(data.next);
@@ -999,20 +1012,52 @@ export function App() {
     }
   }
   async function submitMessage(payload: any) {
-    const roomId = activeRef.current?.id;
+    const roomId = payload.roomId || activeRef.current?.id;
     if (!roomId) return;
     if (
+      activeRef.current?.id === roomId &&
       activeRef.current?.mutedUntil &&
       Date.parse(activeRef.current.mutedUntil) > Date.now()
     )
       throw new Error(
         "The host muted you. You can send messages after you are unmuted.",
       );
-    await api(`/rooms/${roomId}/messages`, "POST", payload);
     setPending((prev) =>
-      prev.filter((p) => p.clientMessageId !== payload.clientMessageId),
+      prev.map((item) =>
+        item.clientMessageId === payload.clientMessageId
+          ? { ...item, status: "sending" }
+          : item,
+      ),
     );
-    await refreshChat();
+    const {
+      roomId: _roomId,
+      replyPreview: _replyPreview,
+      status: _status,
+      ...body
+    } = payload;
+    await api(`/rooms/${roomId}/messages`, "POST", body);
+    setPending((prev) =>
+      prev.map((item) =>
+        item.clientMessageId === payload.clientMessageId
+          ? { ...item, status: "sent" }
+          : item,
+      ),
+    );
+    background(() => refreshChat(roomId));
+  }
+  async function retryPendingMessage(message: any) {
+    try {
+      await submitMessage(message);
+    } catch (e) {
+      setPending((prev) =>
+        prev.map((item) =>
+          item.clientMessageId === message.clientMessageId
+            ? { ...item, status: "failed" }
+            : item,
+        ),
+      );
+      notify(`${(e as Error).message} — tap to retry.`, true);
+    }
   }
   async function sendMessage(e: FormEvent) {
     e.preventDefault();
@@ -1022,13 +1067,31 @@ export function App() {
       text: draft.trim(),
       replyTo: reply?.id,
     };
+    const replyPreview = reply
+      ? {
+          id: reply.id,
+          senderId: reply.senderId,
+          name: reply.name,
+          text: reply.text,
+        }
+      : null;
     setDraft("");
     setReply(null);
-    setPending((p) => [...p, { ...payload, roomId: active.id }]);
+    setPending((p) => [
+      ...p,
+      { ...payload, replyPreview, roomId: active.id, status: "sending" },
+    ]);
     try {
-      await submitMessage(payload);
+      await submitMessage({ ...payload, roomId: active.id });
     } catch (e) {
-      notify(`${(e as Error).message} — your message is ready to retry.`, true);
+      setPending((prev) =>
+        prev.map((item) =>
+          item.clientMessageId === payload.clientMessageId
+            ? { ...item, status: "failed" }
+            : item,
+        ),
+      );
+      notify(`${(e as Error).message} — tap to retry.`, true);
     }
   }
   async function attach(file: File) {
@@ -2408,14 +2471,12 @@ export function App() {
                     ? "Your next hello"
                     : active.title}
                 </h2>
-                <p>
-                  {active.type === "STRANGER"
-                    ? active.asl_revealed
-                      ? "ASL milestone reached · your preferences apply"
-                      : "Identity hidden · get to know each other first"
-                    : `${active.online} active · ${active.type === "SHARED_GROUP" ? "Room joined by link" : "Verified community"}`}
-                  {isOwner && <span className="label">YOU’RE THE HOST</span>}
-                </p>
+                {active.type !== "STRANGER" && (
+                  <p>
+                    {`${active.online} active · ${active.type === "SHARED_GROUP" ? "Room joined by link" : "Verified community"}`}
+                    {isOwner && <span className="label">YOU’RE THE HOST</span>}
+                  </p>
+                )}
               </div>
               {isOwner && active.type === "SHARED_GROUP" && (
                 <button
@@ -2454,6 +2515,12 @@ export function App() {
             </div>
             <div className="chat-layout">
               <div className="chat-main">
+                {active.type === "STRANGER" && user && !active.asl_revealed && (
+                  <QuickChatProgress
+                    userId={user.id}
+                    progress={active.aslProgress || []}
+                  />
+                )}
                 <div className="messages" aria-live="polite">
                   {messageNext && (
                     <button
@@ -2495,12 +2562,18 @@ export function App() {
                           })}
                         </small>
                       </span>
-                      {m.replyTo && (
-                        <small className="reply-preview">
-                          Replying to an earlier message
-                        </small>
-                      )}
                       <div className="message-bubble">
+                        {m.replyTo && (
+                          <div className="message-quote">
+                            <strong>
+                              {m.replyPreview?.name || "Original message"}
+                            </strong>
+                            <span>
+                              {m.replyPreview?.text ||
+                                "Original message unavailable."}
+                            </span>
+                          </div>
+                        )}
                         {m.text}
                         {m.attachmentId && (
                           <button
@@ -2566,17 +2639,36 @@ export function App() {
                     .filter((p) => p.roomId === active.id)
                     .map((p) => (
                       <div
-                        className="message own pending"
+                        className={`message own pending ${p.status || "sending"}`}
                         key={p.clientMessageId}
                       >
-                        <div className="message-bubble">{p.text}</div>
-                        <button
-                          className="text-button"
-                          disabled={isMuted}
-                          onClick={() => act(() => submitMessage(p))}
-                        >
-                          Not confirmed · retry
-                        </button>
+                        <div className="message-bubble">
+                          {p.replyTo && (
+                            <div className="message-quote">
+                              <strong>
+                                {p.replyPreview?.name || "Original message"}
+                              </strong>
+                              <span>
+                                {p.replyPreview?.text ||
+                                  "Original message unavailable."}
+                              </span>
+                            </div>
+                          )}
+                          {p.text}
+                        </div>
+                        {p.status === "failed" ? (
+                          <button
+                            className="text-button pending-status"
+                            disabled={isMuted}
+                            onClick={() => retryPendingMessage(p)}
+                          >
+                            Couldn’t send · tap to retry
+                          </button>
+                        ) : (
+                          <small className="pending-status">
+                            {p.status === "sent" ? "Sent" : "Sending…"}
+                          </small>
+                        )}
                       </div>
                     ))}
                   {active.type === "STRANGER" && user && (
@@ -2584,7 +2676,6 @@ export function App() {
                       key={active.id}
                       userId={user.id}
                       aslRevealed={Boolean(active.asl_revealed)}
-                      progress={active.aslProgress || []}
                       participants={active.participants || []}
                       sharing={active.pictureSharing}
                       busy={busy}
@@ -2620,7 +2711,11 @@ export function App() {
                   )}
                   {reply && (
                     <div className="reply-bar">
-                      Replying to: {reply.text.slice(0, 80)}
+                      Replying to{" "}
+                      {reply.senderId === user?.id
+                        ? "your message"
+                        : reply.name}
+                      : {reply.text.slice(0, 80)}
                       <button
                         type="button"
                         onClick={() => setReply(null)}

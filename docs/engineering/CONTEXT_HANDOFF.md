@@ -1,6 +1,13 @@
 # Charoo shared engineering handoff
 
-## Latest milestone: integrated profile photo and bio
+## Current denver branch: origin/main integration
+
+- **2026-11-17**, workspace `denver`, branch `dJangg0/asl-profile-display-chat-fix`, base `origin/main`. Integrated `origin/main` commit `31c7b88` after the Cloudflare Preview configuration commit `4472fec`.
+- Preserved upstream profile photo direct-upload and integrated avatar/bio work, plus this branch's chat delivery/reply/progress UI and Cloudflare Preview configuration. Resolved documentation conflicts in SRS FR-12/BE-05/BE-06, architecture decisions, and the implementation matrix. Profile uploads no longer require an external scanner; room attachments remain scanner-gated.
+- PASS: `pnpm typecheck` (both TypeScript projects) and `git diff --check` after resolving the documentation conflicts. No application, browser, native or Cloudflare suite was rerun for the merge; earlier evidence below applies only to the commits/environments noted there.
+- No Cloudflare resource mutation, secret upload, migration, or deployment was performed as part of this merge.
+
+## Imported upstream milestone: integrated profile photo and bio
 
 - **2026-11-17**, workspace `stockholm`, branch `dJangg0/upload-picture-profile-offset`, HEAD `f9fff70`, target `origin/main`. User requested removing the separate photo panel, clicking the photo in the identity card to add/change it repeatedly, and a bio. Prior direct upload fix remains; no external service or unrelated work was added.
 - `ProfilePicture` now renders the identity card with a native avatar button, hidden file picker and camera affordance. Uploaded images appear in the avatar; both pointer and keyboard activation choose a file. Existing upload/replace validation, pending/error/retry and authoritative success checks remain. Removed obsolete standalone-panel styles.
@@ -27,11 +34,28 @@ Sanitized summary for the latest Cloudflare staging milestone. Root [SRS.md](../
 
 | Field | Current state |
 |---|---|
-| Updated | 2026-11-16 — quick-chat timeout deadline review and local verification |
-| Repository / workspace | Charoo / `dhaka` |
-| Branch / target | `dJangg0/cloudflare-durable-objects-blueprint` / `origin/main` |
-| Starting commit | `39b3cc70ad840669207bbd71a82351683a00abd1` |
-| Objective / state | Quick-chat timeout is implemented for both targets and deployed to staging Worker version `17f1ade6-612c-4112-b9da-579472019756`. Review fixed late reservation past the deadline and added local coverage. Production remains pending OAuth configuration and credential remediation. |
+| Updated | 2026-11-17 — Cloudflare Preview check diagnosis and local configuration verification |
+| Repository / workspace | Charoo / `denver` |
+| Branch / target | `dJangg0/asl-profile-display-chat-fix` / `origin/main` |
+| Starting commit | `f9fff705664d8079f6860acc988c72914e2dfce6` |
+| Objective / state | Chat UX changes are committed and [PR #2](https://github.com/dJangg0/charoo.live/pull/2) is open. Current task: correct the Cloudflare PR Preview check that failed at `npx wrangler preview` for missing bindings. Local preview config, command, and origin handling are implemented and build/config-checked. No remote Preview deploy, resource mutation, or secret upload. Prior task details and staging notes follow below. |
+
+## Cloudflare Preview check (2026-11-17)
+
+- Attachment `.context/attachments/FjuUkt/pasted_text_2026-11-17_14-10-49.txt` shows Cloudflare's `pnpm run build` and both TypeScript checks passed; deploy failed because bare `npx wrangler preview` had no `previews` block. It was using Wrangler's default config selection.
+- Added `pnpm run preview:cloudflare` selecting `wrangler.cloudflare.jsonc`, Preview-only bindings to shared staging D1/R2 and staging dead-letter queue, and isolated-per-Preview DO bindings. Added `PREVIEW_MODE`; browser Origin must equal the request origin while enabled. README documents dashboard build/deploy command settings and limitations; SRS/AD-04 and matrix reflect the security/config contract.
+- Preview shares staging D1/R2 and uses a dedicated Preview base `MESSAGE_KEY`; only synthetic data is appropriate. Static Preview `WEB_ORIGIN` is the staging URL, so generated absolute links go to staging; provider sign-in/email are not configured. Queue consumers and Cron do not run in Previews.
+- PASS: `pnpm run build:cloudflare`; `pnpm exec wrangler deploy --dry-run --config wrangler.cloudflare.jsonc`; code/config Prettier; `git diff --check`. Vite emitted existing Zod annotation and large-chunk warnings. The Wrangler dry-run validates the production config/bundle, not the Preview block or remote deployment. No tests run, no Cloudflare mutation/deploy/secret upload. Markdown Prettier fails at HEAD for all four edited docs; no broad reformat.
+- Next: owner updates Cloudflare Worker Build commands to `pnpm run build:cloudflare` and `pnpm run preview:cloudflare`, configures a dedicated synthetic Preview `MESSAGE_KEY`, then reruns the connected Preview build. Dashboard changes are outside this workspace.
+
+## Chat UX task in denver (2026-11-17)
+
+- Screenshot showed quick-chat counts You 4/5 and Stranger 3/5. The five-each milestone was not met. Qualifying content also requires at least eight normalized characters, four distinct characters, a three-second gap and a new content fingerprint. Peer ASL remains subject to the owner's visibility preference.
+- Source review confirmed room WebSockets carry authenticated updates/typing; message writes use REST with a stable client ID, transactionally committed before durable outbox projection/event delivery. Keep this transport split.
+- Local changes: optimistic bubbles show `Sending…`, become `Sent` pending authoritative history refresh, and offer retry only after a failed write; post-ack history refresh is background work. Refresh now targets the room that accepted the message and reconciles pending IDs when a room is reopened. Reply history includes a privacy-checked quoted message preview. Quick-chat progress is a compact two-person bar above history, with counts to five each; permitted age/sex/location appears after qualification.
+- Commits: `b860984` ASL progress, `e4ec997` quoted replies, and `58f3b44` delivery states/reconciliation. Pushed to `origin/dJangg0/asl-profile-display-chat-fix`; PR #2 is open. `pnpm typecheck`, `git diff --check`, changed-file Prettier checks, and all 10 `tests/browser/disclosure.spec.ts` scenarios pass, including the delayed-send room-switch and quoted-reply regressions. Other Vitest/browser suites, responsive follow-up, Cloudflare runtime, deployment and migration were not run.
+
+## Earlier staging milestone (2026-11-16)
 
 ## Delivered
 

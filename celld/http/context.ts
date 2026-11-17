@@ -39,10 +39,19 @@ export const uuid = (value: string | undefined) =>
 // reach the same Vite server. Accept that alias only on the configured port;
 // Vite normalizes same-origin fallback-port requests before proxying to Celld.
 export function trustedOrigin(
-  env: Pick<Env, "WEB_ORIGIN" | "ADMIN_ORIGIN" | "NODE_ENV">,
+  env: Pick<Env, "WEB_ORIGIN" | "ADMIN_ORIGIN" | "NODE_ENV" | "PREVIEW_MODE">,
   origin: string | undefined | null,
+  requestUrl?: string,
 ): boolean {
   if (!origin) return false;
+  if (env.PREVIEW_MODE === "true") {
+    if (!requestUrl) return false;
+    try {
+      return new URL(origin).origin === new URL(requestUrl).origin;
+    } catch {
+      return false;
+    }
+  }
   const configuredOrigins = [env.WEB_ORIGIN, env.ADMIN_ORIGIN].filter(
     (value): value is string => !!value,
   );

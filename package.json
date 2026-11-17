@@ -15,6 +15,7 @@
     "deploy": "pnpm build && tsx celld/scripts/deploy.ts",
     "deploy:cloudflare": "pnpm build:cloudflare && wrangler deploy --config wrangler.cloudflare.jsonc",
     "deploy:cloudflare:dry-run": "pnpm build:cloudflare && wrangler deploy --config wrangler.cloudflare.jsonc --dry-run",
+    "preview:cloudflare": "wrangler preview --config wrangler.cloudflare.jsonc",
     "deploy:cloudflare:staging": "pnpm build:cloudflare:staging && wrangler deploy --config wrangler.staging.jsonc",
     "deploy:cloudflare:staging:dry-run": "pnpm build:cloudflare:staging && wrangler deploy --config wrangler.staging.jsonc --dry-run",
     "dev": "vite --host 127.0.0.1",

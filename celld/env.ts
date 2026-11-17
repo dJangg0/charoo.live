@@ -22,6 +22,7 @@ export const workerEnvironment = {
     "AI_MODEL",
     "TRUSTED_CLIENT_IP_HEADER",
     "ADMIN_NO_AUTH",
+    "PREVIEW_MODE",
   ] as const,
 };
 // Celld RPC returns plain values. Keep its structural client surface explicit;
@@ -86,6 +87,7 @@ export interface Env {
   AI_MODEL?: string;
   TRUSTED_CLIENT_IP_HEADER?: string;
   ADMIN_NO_AUTH?: string;
+  PREVIEW_MODE?: string;
   DB: D1Database;
   MEDIA: R2Bucket;
   JOBS: Queue<Job>;

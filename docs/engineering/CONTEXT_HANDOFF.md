@@ -4,13 +4,21 @@ Sanitized summary for the latest Cloudflare staging milestone. Root [SRS.md](../
 
 | Field | Current state |
 |---|---|
-| Updated | 2026-11-17 — chat UX review and regression verification |
+| Updated | 2026-11-17 — Cloudflare Preview check diagnosis and local configuration verification |
 | Repository / workspace | Charoo / `denver` |
 | Branch / target | `dJangg0/asl-profile-display-chat-fix` / `origin/main` |
 | Starting commit | `f9fff705664d8079f6860acc988c72914e2dfce6` |
-| Objective / state | Implement and review optimistic message states, quoted reply previews, and the compact per-person ASL progress bar above quick-chat history. Fixed a room-switch pending-message reconciliation defect and added browser regressions. Three feature commits are pushed; [PR #2](https://github.com/dJangg0/charoo.live/pull/2) is open. No deployment or migration. Prior staging milestone notes follow below. |
+| Objective / state | Chat UX changes are committed and [PR #2](https://github.com/dJangg0/charoo.live/pull/2) is open. Current task: correct the Cloudflare PR Preview check that failed at `npx wrangler preview` for missing bindings. Local preview config, command, and origin handling are implemented and build/config-checked. No remote Preview deploy, resource mutation, or secret upload. Prior task details and staging notes follow below. |
 
-## Current task in denver (2026-11-17)
+## Cloudflare Preview check (2026-11-17)
+
+- Attachment `.context/attachments/FjuUkt/pasted_text_2026-11-17_14-10-49.txt` shows Cloudflare's `pnpm run build` and both TypeScript checks passed; deploy failed because bare `npx wrangler preview` had no `previews` block. It was using Wrangler's default config selection.
+- Added `pnpm run preview:cloudflare` selecting `wrangler.cloudflare.jsonc`, Preview-only bindings to shared staging D1/R2 and staging dead-letter queue, and isolated-per-Preview DO bindings. Added `PREVIEW_MODE`; browser Origin must equal the request origin while enabled. README documents dashboard build/deploy command settings and limitations; SRS/AD-04 and matrix reflect the security/config contract.
+- Preview shares staging D1/R2 and uses a dedicated Preview base `MESSAGE_KEY`; only synthetic data is appropriate. Static Preview `WEB_ORIGIN` is the staging URL, so generated absolute links go to staging; provider sign-in/email are not configured. Queue consumers and Cron do not run in Previews.
+- PASS: `pnpm run build:cloudflare`; `pnpm exec wrangler deploy --dry-run --config wrangler.cloudflare.jsonc`; code/config Prettier; `git diff --check`. Vite emitted existing Zod annotation and large-chunk warnings. The Wrangler dry-run validates the production config/bundle, not the Preview block or remote deployment. No tests run, no Cloudflare mutation/deploy/secret upload. Markdown Prettier fails at HEAD for all four edited docs; no broad reformat.
+- Next: owner updates Cloudflare Worker Build commands to `pnpm run build:cloudflare` and `pnpm run preview:cloudflare`, configures a dedicated synthetic Preview `MESSAGE_KEY`, then reruns the connected Preview build. Dashboard changes are outside this workspace.
+
+## Chat UX task in denver (2026-11-17)
 
 - Screenshot showed quick-chat counts You 4/5 and Stranger 3/5. The five-each milestone was not met. Qualifying content also requires at least eight normalized characters, four distinct characters, a three-second gap and a new content fingerprint. Peer ASL remains subject to the owner's visibility preference.
 - Source review confirmed room WebSockets carry authenticated updates/typing; message writes use REST with a stable client ID, transactionally committed before durable outbox projection/event delivery. Keep this transport split.

@@ -87,3 +87,66 @@ test("quick-chat cancels its queue after two minutes", async ({
   ).toBeVisible();
   expect(operations).toContain("cancel");
 });
+
+test("accepting a reconnect request in Connections opens the private chat", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  const requestId = "30000000-0000-4000-8000-000000000003";
+  const roomId = "20000000-0000-4000-8000-000000000005";
+  let accepted = false;
+  await page.route("**/api/requests", (route) =>
+    route.fulfill({
+      json: accepted
+        ? []
+        : [
+            {
+              id: requestId,
+              requester_id: visualIds.peer,
+              target_id: visualIds.user,
+              display_name: "Milo Hart",
+              kind: "RECONNECT",
+              state: "PENDING",
+            },
+          ],
+    }),
+  );
+  await page.route(`**/api/requests/${requestId}/respond`, (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({ accept: true });
+    accepted = true;
+    return route.fulfill({ json: { roomId } });
+  });
+  await page.route(`**/api/rooms/${roomId}`, (route) =>
+    route.fulfill({
+      json: {
+        id: roomId,
+        type: "PRIVATE",
+        title: "Private chat",
+        state: "OPEN",
+        online: 2,
+        participants: [
+          { id: visualIds.user, name: "Cora Lane", verified: true },
+          { id: visualIds.peer, name: "Milo Hart", verified: true },
+        ],
+      },
+    }),
+  );
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: /^Your connections/ })
+    .click();
+  await expect(
+    page.getByText("reconnect request", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Accept", exact: true }).click();
+  await expect(
+    page.locator(".chat").getByRole("heading", { name: "Private chat" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to rooms" }).click();
+  await expect(
+    page.getByText("reconnect request", { exact: true }),
+  ).toHaveCount(0);
+});

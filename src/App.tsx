@@ -2203,7 +2203,7 @@ export function App() {
                           })
                         }
                       >
-                        {r.kind === "RECONNECT" ? "Unavailable" : "Accept"}
+                        Accept
                       </button>
                       <button
                         className="text-button"

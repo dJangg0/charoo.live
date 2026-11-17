@@ -4,7 +4,7 @@ This maintained contract guides Charoo changes and reviews; it does not certify 
 
 ## Status and scope
 
-Implementation status and open findings reviewed against the repository on **2026-11-12**. FR-06 reconnect consent was updated on **2026-11-17**; focused local domain and API tests pass, while browser and production runtime remain unverified. The flags distinguish code that exists today from goals and engineering rules. **CURRENT** describes code presence, not correctness, complete test coverage, or an enabled production integration. Read the open findings before preserving current behavior; buggy behavior is not an intended requirement.
+Implementation status and open findings were reviewed against the repository on **2026-11-12**. FR-06 reconnect consent has local domain and API coverage and a fixture-backed browser check for acceptance through Connections. Native and deployed runtime verification for reconnect remains pending. The flags distinguish code that exists today from goals and engineering rules. **CURRENT** describes code presence, not correctness, complete test coverage, or an enabled production integration. Read the open findings before preserving current behavior; buggy behavior is not an intended requirement.
 
 | Flag                  | Meaning                                                                                                                      |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |

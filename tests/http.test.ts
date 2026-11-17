@@ -572,37 +572,53 @@ describe("HTTP API", () => {
     ).json();
     expect(filtered.length).toBe(1);
   });
-  it("marks the exact archived chat with a pending reconnect", async () => {
+  it("marks all archives for a peer while a reconnect is pending", async () => {
     const f = await fixture(),
       requester = await f.guest(true),
       recipient = await f.guest(true),
+      unrelatedPeer = await f.guest(true),
       sourceRoomId = crypto.randomUUID(),
       otherRoomId = crypto.randomUUID(),
+      unrelatedRoomId = crypto.randomUUID(),
       now = iso(),
       expiresAt = iso(Date.now() + 86400000);
-    for (const roomId of [sourceRoomId, otherRoomId])
+    for (const [roomId, peerId] of [
+      [sourceRoomId, recipient.actor.userId],
+      [otherRoomId, recipient.actor.userId],
+      [unrelatedRoomId, unrelatedPeer.actor.userId],
+    ])
       await f.db
         .prepare(
           "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
         )
-        .bind(
-          requester.actor.userId,
-          recipient.actor.userId,
-          roomId,
-          now,
-          now,
-          expiresAt,
-        )
+        .bind(requester.actor.userId, peerId, roomId, now, now, expiresAt)
         .run();
-    await f.app.command(requester.actor, "social.create", {
+    const reconnect = {
       kind: "RECONNECT",
       targetId: recipient.actor.userId,
       roomId: sourceRoomId,
-    });
+    };
+    const created = await request(f, "/requests", "POST", reconnect, requester);
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    const conflicting = await request(
+      f,
+      "/requests",
+      "POST",
+      { ...reconnect, roomId: otherRoomId },
+      requester,
+    );
+    expect(conflicting.status).toBe(409);
 
-    const history: any = await (
-      await request(f, "/quick-chat-history", "GET", undefined, requester)
-    ).json();
+    const pending = await request(
+      f,
+      "/quick-chat-history",
+      "GET",
+      undefined,
+      requester,
+    );
+    expect(pending.status).toBe(200);
+    const history = await pending.json();
     expect(history).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -611,6 +627,40 @@ describe("HTTP API", () => {
         }),
         expect.objectContaining({
           archive_id: otherRoomId,
+          reconnect_pending: 1,
+        }),
+        expect.objectContaining({
+          archive_id: unrelatedRoomId,
+          reconnect_pending: 0,
+        }),
+      ]),
+    );
+    const declined = await request(
+      f,
+      `/requests/${id}/respond`,
+      "POST",
+      { accept: false },
+      recipient,
+    );
+    expect(declined.status).toBe(200);
+    const refreshed = await request(
+      f,
+      "/quick-chat-history",
+      "GET",
+      undefined,
+      requester,
+    );
+    expect(refreshed.status).toBe(200);
+    const refreshedHistory = await refreshed.json();
+    expect(refreshedHistory).toHaveLength(2);
+    expect(refreshedHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          archive_id: otherRoomId,
+          reconnect_pending: 0,
+        }),
+        expect.objectContaining({
+          archive_id: unrelatedRoomId,
           reconnect_pending: 0,
         }),
       ]),

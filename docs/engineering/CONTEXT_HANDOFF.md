@@ -1,23 +1,26 @@
-## Active feature work — reconnect consent (2026-11-17)
-
-- User authorized a reconnect request flow with recipient accept/reject and removal of the associated archive when rejected. Implemented in source and documented in FR-06; four focused domain tests and one API test pass locally.
-- Exact requester-owned, unexpired archive ID is required; acceptance checks current archive and creates a private room; rejection atomically marks the request and deletes only that archive row. The quick-chat archive is asymmetric: the person left behind owns the row.
-- Reconnect is free under `reconnect_price: 0`. GAP-01's local implementation is covered by tests for exact archive, duplicate, acceptance, expiry, rejection/archive removal, block denial and the pending archive API field. `pnpm check` passes 113 tests; browser request/response UI, native runtime and production deployment remain unverified.
-- Task checkpoint: `.context/handoffs/reconnect-consent-codex.md`. The profile-picture feedback changes and FR-11 documentation are also included as a separate PR commit, with typecheck and 8 focused browser tests passing.
-
 # Charoo shared engineering handoff
 
-Sanitized summary for the current deployment-isolation work. Root [SRS.md](../../SRS.md) remains canonical. Recheck repository and external state before continuing.
+Root [SRS.md](../../SRS.md) remains canonical. Recheck repository and external state before continuing.
 
 | Field | Current state |
 |---|---|
-| Updated | 2026-11-18 — Cloudflare deployment branch guard |
+| Updated | 2026-11-18 — reconnect review follow-up |
 | Repository / workspace | Charoo / `nicosia` |
 | Branch / target | `dJangg0/cloudflare-deployment-fix` / `origin/staging` |
-| HEAD | `3e652b3`; current deployment-guard changes and unrelated UI edits are uncommitted. Recheck before resuming. |
-| Objective / state | GitHub checks are scoped to `main` and `staging`; production Wrangler `WEB_ORIGIN` is `https://chat.charoo.live`, while staging remains on its separate `workers.dev` origin. Package deploy scripts now reject a mismatched Git/Workers Builds branch. Cloudflare preview/build controls remain dashboard-managed and were not changed. |
+| HEAD at verification | `3965123` with local reconnect review edits |
 
-## Delivered and verified
+## Reconnect review follow-up
+
+- Quick-chat history now reports a pending reconnect across all archive rows for the requester and peer. The originating archive still governs validation, acceptance and removal on decline.
+- The Connections action says **Accept** and opens the private room returned by the response endpoint.
+- Typecheck and 117 Vitest tests passed, including the HTTP regression for a pending request across same-peer archives and clearing that state on decline. Thirty-three Playwright tests passed with API fixtures, including the Connections acceptance regression. Native and deployed runtime checks for these changes remain pending. See the [implementation matrix](IMPLEMENTATION_MATRIX.md#functional-requirements).
+- Task checkpoint is `.context/handoffs/reconnect-review-fixes-root.md`.
+
+## Cloudflare deployment isolation
+
+GitHub checks target `main` and `staging`. Production Wrangler uses `https://chat.charoo.live` and staging uses its separate `workers.dev` origin. Package deploy scripts enforce the branch and target match. Cloudflare preview and build controls remain dashboard-managed.
+
+### Delivered and verified
 
 - Updated `.github/workflows/check.yml`: `push` and `pull_request` events now target only `main` and `staging`. The existing workflow runs checks and a Celld dry run; it contains no Cloudflare deployment step.
 - Added `cloudflare-deploy-guard.ts` to the production and staging deploy scripts: production requires `main`, staging requires `staging`; Workers Builds reads `WORKERS_CI_BRANCH`, and local deploys use `git branch --show-current`. The README now requires these package scripts instead of raw `wrangler deploy`.

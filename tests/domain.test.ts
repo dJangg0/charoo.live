@@ -750,6 +750,41 @@ describe("Durable authorities and coordination", () => {
     ).toEqual({ state: "PENDING" });
   });
 
+  it("expires reconnect requests with their source archive", async () => {
+    const f = await fixture(),
+      requester = await f.guest(true),
+      recipient = await f.guest(true),
+      sourceRoomId = crypto.randomUUID(),
+      sourceExpiresAt = iso(Date.now() + 3600000);
+    await f.db
+      .prepare(
+        "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
+      )
+      .bind(
+        requester.actor.userId,
+        recipient.actor.userId,
+        sourceRoomId,
+        iso(),
+        iso(),
+        sourceExpiresAt,
+      )
+      .run();
+
+    const request = unwrap(
+      await f.app.command(requester.actor, "social.create", {
+        kind: "RECONNECT",
+        targetId: recipient.actor.userId,
+        roomId: sourceRoomId,
+      }),
+    );
+    expect(
+      await f.db
+        .prepare("SELECT expires_at FROM social_requests WHERE id=?")
+        .bind(request.id)
+        .first(),
+    ).toEqual({ expires_at: sourceExpiresAt });
+  });
+
   it("rejecting a reconnect removes only its source archive from the requester", async () => {
     const f = await fixture(),
       requester = await f.guest(true),

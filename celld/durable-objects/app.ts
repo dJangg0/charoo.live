@@ -436,6 +436,7 @@ export class AppCoordinator extends DurableObject<Env> {
             requireThat(u?.verified, 403, "Verify your email first");
             const b = requestSchema.parse(input);
             const target = await user(env, b.targetId);
+            let requestExpiresAt = iso(Date.now() + 86400000);
             requireThat(
               target.verified && target.id !== u.id,
               400,
@@ -448,15 +449,17 @@ export class AppCoordinator extends DurableObject<Env> {
             );
             if (b.kind === "RECONNECT") {
               requireThat(b.roomId, 400, "A past quick chat is required");
+              const archive = await first(
+                env,
+                "SELECT expires_at FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=? AND expires_at>?",
+                [u.id, target.id, b.roomId, iso()],
+              );
               requireThat(
-                await first(
-                  env,
-                  "SELECT 1 FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=? AND expires_at>?",
-                  [u.id, target.id, b.roomId, iso()],
-                ),
+                archive,
                 404,
                 "Reconnect window expired",
               );
+              requestExpiresAt = archive.expires_at;
             } else {
               requireThat(b.roomId, 400, "A shared conversation is required");
               unwrap(await roomStub(env, b.roomId).authorize(actor!, false));
@@ -504,7 +507,7 @@ export class AppCoordinator extends DurableObject<Env> {
                         b.kind,
                         b.roomId || null,
                         iso(),
-                        iso(Date.now() + 86400000),
+                        requestExpiresAt,
                       ],
                     ),
                   ],

@@ -1,5 +1,35 @@
 # Charoo shared engineering handoff
 
+## Current denver branch: origin/main integration
+
+- **2026-11-17**, workspace `denver`, branch `dJangg0/asl-profile-display-chat-fix`, base `origin/main`. Integrated `origin/main` commit `31c7b88` after the Cloudflare Preview configuration commit `4472fec`.
+- Preserved upstream profile photo direct-upload and integrated avatar/bio work, plus this branch's chat delivery/reply/progress UI and Cloudflare Preview configuration. Resolved documentation conflicts in SRS FR-12/BE-05/BE-06, architecture decisions, and the implementation matrix. Profile uploads no longer require an external scanner; room attachments remain scanner-gated.
+- PASS: `pnpm typecheck` (both TypeScript projects) and `git diff --check` after resolving the documentation conflicts. No application, browser, native or Cloudflare suite was rerun for the merge; earlier evidence below applies only to the commits/environments noted there.
+- No Cloudflare resource mutation, secret upload, migration, or deployment was performed as part of this merge.
+
+## Imported upstream milestone: integrated profile photo and bio
+
+- **2026-11-17**, workspace `stockholm`, branch `dJangg0/upload-picture-profile-offset`, HEAD `f9fff70`, target `origin/main`. User requested removing the separate photo panel, clicking the photo in the identity card to add/change it repeatedly, and a bio. Prior direct upload fix remains; no external service or unrelated work was added.
+- `ProfilePicture` now renders the identity card with a native avatar button, hidden file picker and camera affordance. Uploaded images appear in the avatar; both pointer and keyboard activation choose a file. Existing upload/replace validation, pending/error/retry and authoritative success checks remain. Removed obsolete standalone-panel styles.
+- `App` exposes the existing `profile.bio` as a clearly labeled **Bio** editor (300 characters) before region/interests, saves through the existing profile PATCH and displays only the saved bio in the owner's identity card. It persists after reload. No backend schema, endpoint, dependency or other-user visibility change.
+- PASS: `pnpm check` (types and110tests); owned profile/bio/layout/responsive browser files27cases plus existing disclosure8cases (**35 total**); `pnpm build:cloudflare` (existing third-party annotation/chunk warnings). Tests caught a portrait-avatar sizing issue; absolute positioning inside the fixed avatar corrected it, and all responsive cases passed afterward.
+- PASS: actual built local workerd app in Playwright, no API mocks: avatar chooser upload, repeated same-file replacement, square photo, Bio save and reload persistence, and absence of a standalone photo panel. Synthetic mobile/desktop screenshots inspected: `.context/profile-card-mobile.png`, `.context/profile-card-desktop.png`. Test session used the existing HTTP-only local cookie override; no production cookie behavior is inferred. No remote deployment or migration.
+- Checkpoint `.context/handoffs/profile-card-root.md`; Vite55040 remains available. The existing direct-upload backend is unchanged. Next: normal code review/deployment when requested; local implementation is complete and uncommitted. The owned local workerd smoke server was stopped; Vite55040 remains for preview.
+
+
+## Previous milestone: scoped profile-photo upload and layout fix
+
+- **2026-11-17**, workspace `stockholm`, branch `dJangg0/upload-picture-profile-offset`, starting HEAD `f9fff70`, target `origin/main`. Latest user steering: fix profile upload only; remove the added scanner service, moderation API, container/dependency and unrelated room-attachment work. Those additions were removed. Profile layout correction remains.
+- Profile status/init no longer depend on scanner settings. Authenticated JPEG/PNG/WebP (up to5MB) uploads use existing private R2, server file/container/size/dimension checks and serialized exact-attempt completion. Failed replacements preserve the current image, successful replacements keep existing cleanup and sharing-consent rules, and duplicate completion is idempotent. Legacy profile scan links return unavailable. Room attachment source/configuration is unchanged.
+- Frontend verifies the backend's matching saved ID/state before success and refreshes the preview. Pending/error/retry states remain. Profile identity/photo/form alignment and mobile account-button spacing are fixed.
+- PASS: `pnpm check` — type checks and **110 tests**. New direct-upload cases run with no scanner settings or external fetch; existing disclosure/privacy/cleanup remains covered. PASS: `pnpm exec playwright test tests/browser/profile-upload.spec.ts tests/browser/profile-layout.spec.ts tests/browser/disclosure.spec.ts tests/browser/disclosure-responsive.spec.ts` — **32 tests** in46.9s. PASS: `pnpm run deploy:cloudflare:dry-run` — frontend/Worker build and bundle, existing dependency annotation/chunk warnings only. No production deployment inferred.
+- PASS: actual isolated local workerd/D1/DO/R2/Queues HTTP smoke with no scanner settings/service:JPEG/PNG/WebP exact private bytes, replacement/idempotence, invalid/MIME/size rejection with same-upload retry, foreign/anonymous/CSRF denials and unchanged room-attachment scanner prerequisite. Existing local migrations were checked with none pending; no replay. Evidence `.context/profile-upload-workerd/results.json`. No remote migrations, resource creation, deployment, push or PR performed.
+- PASS: actual Playwright browser file selection and saved preview against the built local workerd app (no API mocks). Synthetic preview screenshot: `.context/profile-upload-fixed.png`. The isolated HTTP origin used a test-only manually installed session cookie; this is not evidence of production HTTPS cookie behavior.
+- Canonical SRS and ADR-02 document the user's profile-only override of the old scanner prerequisite. Validation is basic file-format checking, not a claim of decoding, metadata removal or automatic content moderation. No new dependencies or database migrations.
+- Task checkpoint: `.context/handoffs/profile-upload-root.md`. Prior scanner-work checkpoints/results are superseded and do not describe this branch's current behavior. Vite55040 is available for local UI preview; recheck processes before reuse. Next: review the scoped diff, then use the normal publication/deployment process if authorized. Local implementation is complete; it has not been deployed.
+
+## Previous staging history
+
 Sanitized summary for the latest Cloudflare staging milestone. Root [SRS.md](../../SRS.md) remains canonical. Recheck repository and external state before continuing.
 
 | Field | Current state |

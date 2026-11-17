@@ -44,7 +44,7 @@ Quick chat searches for up to two minutes, then cancels the queue if no match is
 
 After **five qualifying messages from each person**, quick chat reveals the ASL fields allowed by each person's privacy settings. After **ten each**, both see that profile-picture sharing is available. Each person independently chooses **Show my profile picture** or **Not now**; declining keeps a share-later action available in that chat. Pictures remain private until their owner approves. A new match starts with fresh progress and consent. Qualifying messages must be distinct and meaningful; rapid/repeated messages and retries do not inflate progress.
 
-Add or replace a private picture from **Your profile** (JPEG, PNG or WebP, up to 5 MB). Uploads require the existing configured media scanner and only save its approved output. Replacing a picture never shares the replacement under an earlier consent. Apply the additive `0005_profile_pictures.sql` D1 migration before deploying this feature; the legacy ASL threshold/duration settings no longer control quick-chat milestones.
+Click the photo/avatar in the top card on **Your profile** to add or replace a private picture (JPEG, PNG or WebP, up to 5 MB). You can change it again anytime. Edit **Bio** in the profile form (up to 300 characters), then select **Save profile**; the saved bio appears in your own profile card. Profile-photo uploads use the existing authenticated backend and private R2 storage, with server-side file-format and size checks; no scanner configuration is needed. Replacing a picture never shares the replacement under an earlier consent. Apply the additive `0005_profile_pictures.sql` D1 migration before deploying this feature; the legacy ASL threshold/duration settings no longer control quick-chat milestones.
 
 Inside a room, the left sidebar shows members, invitation tools, and host controls. Back restores the main navigation; on mobile, the Members button opens the same sidebar. Hosts can mute members for 30 minutes or unmute them immediately. Muted members can read but cannot send messages, reactions, or attachments. Block/Unblock hides or restores a person's messages for the user who clicks it and stops private interactions.
 
@@ -132,7 +132,7 @@ Providers are optional; missing integrations return an unavailable response. AI 
 
 Email links and Google callbacks retain shared-room invitations. Google uses PKCE, browser/session-bound one-use state and nonce-checked signed ID tokens. Gmail and Workspace identities can link automatically; other mailboxes require email verification first. Guest upgrades keep their identity. Signing into an existing email account preserves that account's history.
 
-Uploads use authenticated Worker endpoints with origin and CSRF checks. R2 keys remain private. The scanner receives the retained JSON contract:
+Uploads use authenticated Worker endpoints with origin and CSRF checks. R2 keys remain private. Profile photos save directly after format/size validation; scanning below applies to room attachments. The scanner receives the retained JSON contract:
 
 ```json
 {

@@ -474,6 +474,12 @@ test("a rejected picture upload keeps the existing picture and allows retry", as
 }) => {
   await visualFixture(context);
   const pictureId = "60000000-0000-4000-8000-000000000001";
+  await page.route("**/api/profile/picture/content**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#ddd1eb"/></svg>',
+    }),
+  );
   await page.route("**/api/profile/picture", (route) =>
     route.fulfill({
       json: {
@@ -498,9 +504,11 @@ test("a rejected picture upload keeps the existing picture and allows retry", as
     mimeType: "image/png",
     buffer: Buffer.from([1, 2, 3, 4]),
   });
-  await expect(page.getByRole("alert")).toHaveText(
-    "Picture upload is temporarily unavailable",
-  );
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Picture upload is temporarily unavailable" }),
+  ).toHaveText("Picture upload is temporarily unavailable");
   await expect(page.getByAltText("Your private profile picture")).toBeVisible();
   await expect(page.getByLabel("Replace profile picture")).toBeEnabled();
 });

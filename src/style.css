@@ -5239,7 +5239,7 @@ canvas {
 }
 .picture-sharing-actions .button,
 .profile-picture-settings .button {
-  min-height: 44px;
+  min-height: 45px;
   max-width: 100%;
   white-space: normal;
 }

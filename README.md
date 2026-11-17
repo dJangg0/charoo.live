@@ -162,7 +162,7 @@ The staging resources are provisioned in the configured Cloudflare account. Appl
 pnpm run db:migrate:cloudflare:staging
 pnpm run deploy:cloudflare:staging:dry-run
 pnpm build:cloudflare:staging
-pnpm exec wrangler deploy --config wrangler.staging.jsonc --secrets-file .secrets.cloudflare.staging.json
+pnpm run deploy:cloudflare:staging --secrets-file .secrets.cloudflare.staging.json
 ```
 
 Later staging deployments can use `pnpm run deploy:cloudflare:staging`. Provider integrations remain unavailable until their staging credentials and nonsecret settings are configured. Use staging data only; the current implementation review lists open access-control findings.
@@ -171,7 +171,7 @@ Later staging deployments can use `pnpm run deploy:cloudflare:staging`. Provider
 
 GitHub Actions runs the `Check` workflow for pushes to `staging` and `main`, and pull requests targeting either branch. The workflow runs application checks and a Celld dry run; it does not deploy either Cloudflare Worker.
 
-For Cloudflare Workers Builds, set the production Worker's production branch to `main` and the staging Worker's production branch to `staging`. Set each Worker's deploy command to its matching script: `pnpm run deploy:cloudflare` for production and `pnpm run deploy:cloudflare:staging` for staging. Those scripts select the corresponding Wrangler configuration and resource set.
+For Cloudflare Workers Builds, set the production Worker's production branch to `main` and the staging Worker's production branch to `staging`. Set each Worker's deploy command to its matching script: `pnpm run deploy:cloudflare` for production and `pnpm run deploy:cloudflare:staging` for staging. Those scripts select the corresponding Wrangler configuration and resource set, and refuse to publish unless the build branch matches the target (`main` for production, `staging` for staging). Workers Builds supplies the branch through `WORKERS_CI_BRANCH`; local deploys use the checked-out Git branch. The guard fails closed if it cannot identify the build branch. Do not use a raw `wrangler deploy` command in Workers Builds: it bypasses this branch check.
 
 For strict isolation, turn off **Enable Preview Builds** in the production Worker's **Settings → Builds → Branch control**. Otherwise, Cloudflare can run a preview build for a push to `staging`; a preview does not replace the active production deployment, but it can still appear as a production Worker build/check. Turn previews off for staging too if it should build only from `staging`. With automatic deployment enabled, pushing to `staging` updates staging and merging into `main` is the production promotion action. To deploy production manually after testing, disable automatic deployment for the production Worker and run `pnpm run deploy:cloudflare` yourself.
 

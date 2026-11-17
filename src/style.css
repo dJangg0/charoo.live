@@ -903,16 +903,101 @@ main {
   font-size: 12px;
 }
 .profile-status {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 20px;
-  margin-top: 35px;
+  gap: 16px;
+  margin: 24px 0;
+  padding: 20px;
 }
-.profile-status h2 {
+.profile-status-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.profile-avatar-editor {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  align-self: start;
+}
+.profile-avatar-button {
+  position: relative;
+  padding: 0;
+}
+.profile-status .profile-avatar-button:disabled {
+  opacity: 1;
+}
+.profile-avatar-button .profile-picture-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+  border: 0;
+  border-radius: inherit;
+}
+.profile-avatar-camera {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--text);
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+  pointer-events: none;
+}
+.profile-avatar-caption {
+  font-size: 11px;
+  color: var(--muted);
+}
+.profile-picture-feedback {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.profile-picture-feedback .button {
+  min-height: 44px;
+}
+.profile-status-copy .profile-bio {
+  margin-top: 12px;
+  white-space: pre-wrap;
+  color: var(--text);
+  font-size: 13px;
+}
+.profile-page .profile-status h2 {
   margin: 0;
 }
 .profile-status p {
   margin: 5px 0;
+}
+.profile-status-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.profile-status-actions .text-button {
+  min-height: 44px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.profile-status-actions .text-button:hover {
+  background: var(--surface-hover);
+}
+.profile-page > .profile-status,
+.profile-page > .profile-form {
+  width: 100%;
+  max-width: 580px;
 }
 .profile-form {
   max-width: 580px;
@@ -1068,28 +1153,6 @@ dialog label {
 }
 .consent-picture-preview {
   margin-bottom: 12px;
-}
-.profile-picture-settings {
-  margin: 24px 0;
-  padding: 20px;
-  max-width: 560px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  line-height: 1.6;
-}
-.profile-picture-settings > p {
-  margin: 10px 0;
-}
-.profile-picture-upload {
-  display: grid;
-  gap: 8px;
-  margin-top: 16px;
-}
-.profile-picture-upload input {
-  max-width: 100%;
-}
-.profile-picture-upload small {
-  color: var(--muted);
 }
 .message {
   max-width: 80%;
@@ -4973,8 +5036,7 @@ canvas {
   aspect-ratio: 1 / 1;
 }
 
-.quick-chat-disclosure,
-.profile-picture-settings {
+.quick-chat-disclosure {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -4991,9 +5053,6 @@ canvas {
   }
   .video-grid {
     grid-template-columns: 1fr;
-  }
-  .profile-status {
-    flex-wrap: wrap;
   }
   .admin-bar {
     flex-wrap: wrap;
@@ -5076,6 +5135,7 @@ canvas {
   }
   .profile-status {
     gap: 14px;
+    padding: 16px;
   }
   .message-tools button {
     min-height: 44px;
@@ -5127,8 +5187,7 @@ canvas {
 }
 
 /* Quick-chat disclosure and private picture controls share the chat's scroll area. */
-.quick-chat-disclosure,
-.profile-picture-settings {
+.quick-chat-disclosure {
   width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -5154,8 +5213,7 @@ canvas {
 .picture-sharing-choice:not(:has(.consent-picture-preview)) > * {
   grid-column: 1;
 }
-.picture-sharing-actions .button,
-.profile-picture-settings .button {
+.picture-sharing-actions .button {
   min-height: 44px;
   max-width: 100%;
   white-space: normal;
@@ -5176,27 +5234,6 @@ canvas {
   max-height: 240px;
   object-fit: contain;
   background: var(--panel);
-}
-.profile-picture-upload,
-.profile-picture-upload input {
-  width: 100%;
-  min-width: 0;
-}
-.profile-picture-upload input {
-  min-height: 44px;
-  font-size: 16px;
-}
-.profile-picture-upload input::file-selector-button {
-  min-height: 44px;
-  max-width: 100%;
-  margin-right: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel);
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
 }
 .chat-head,
 .composer {
@@ -5220,9 +5257,6 @@ canvas {
   }
   .picture-sharing-actions .button {
     flex: 1 1 auto;
-  }
-  .profile-picture-settings {
-    padding: 16px;
   }
 }
 @media (max-width: 360px) {

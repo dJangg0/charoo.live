@@ -2230,21 +2230,27 @@ export function App() {
           </section>
         )}
         {!active && page === "profile" && (
-          <section className="content-page">
+          <section className="content-page profile-page">
             <span className="eyebrow">YOU CHOOSE WHAT TO SHARE</span>
             <h1>
               Your little corner<span className="accent">.</span>
             </h1>
             {user ? (
               <>
-                <div className="profile-status">
-                  <span className="avatar large">{user.displayName[0]}</span>
-                  <div>
+                <ProfilePicture key={user.id} displayName={user.displayName}>
+                  <div className="profile-status-copy">
                     <h2>{user.displayName}</h2>
                     <p>
                       {user.verified
                         ? "✓ Email verified"
-                        : "Guest identity · temporary"}{" "}
+                        : "Guest identity · temporary"}
+                    </p>
+                    {user.profile.bio && (
+                      <p className="profile-bio">{user.profile.bio}</p>
+                    )}
+                  </div>
+                  {(!user.verified || googleEnabled) && (
+                    <div className="profile-status-actions">
                       {!user.verified && (
                         <button
                           className="text-button"
@@ -2261,10 +2267,9 @@ export function App() {
                           Connect Google
                         </button>
                       )}
-                    </p>
-                  </div>
-                </div>
-                <ProfilePicture key={user.id} />
+                    </div>
+                  )}
+                </ProfilePicture>
                 <form
                   className="profile-form"
                   onSubmit={(e) => {
@@ -2287,6 +2292,21 @@ export function App() {
                   }}
                 >
                   <JoinProfileFields profile={user.profile} />
+                  <label htmlFor="profile-bio">
+                    Bio
+                    <textarea
+                      id="profile-bio"
+                      name="bio"
+                      rows={3}
+                      maxLength={300}
+                      placeholder="Tell us a little about yourself."
+                      aria-describedby="profile-bio-help"
+                      defaultValue={user.profile.bio}
+                    />
+                  </label>
+                  <p className="form-note" id="profile-bio-help">
+                    A short introduction, up to 300 characters.
+                  </p>
                   <label>
                     Approximate region
                     <input
@@ -2301,14 +2321,6 @@ export function App() {
                     <input
                       name="interests"
                       defaultValue={user.profile.interests.join(", ")}
-                    />
-                  </label>
-                  <label>
-                    A little about you
-                    <textarea
-                      name="bio"
-                      maxLength={300}
-                      defaultValue={user.profile.bio}
                     />
                   </label>
                   <label>

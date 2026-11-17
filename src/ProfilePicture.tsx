@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Camera } from "lucide-react";
 import { api, getCsrf } from "./api";
 
 type PictureStatus = {
@@ -6,13 +7,21 @@ type PictureStatus = {
   uploadAvailable: boolean;
 };
 
-export function ProfilePicture() {
+export function ProfilePicture({
+  displayName,
+  children,
+}: {
+  displayName: string;
+  children: ReactNode;
+}) {
   const [status, setStatus] = useState<PictureStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const mounted = useRef(true);
+  const picker = useRef<HTMLInputElement>(null);
+  const helpId = useId();
   async function load() {
     const next = await api<PictureStatus>("/profile/picture");
     if (mounted.current) setStatus(next);
@@ -60,7 +69,13 @@ export function ProfilePicture() {
           result.error || "Picture upload failed. Please try again.",
         );
       }
-      await api(`/profile/picture/${initial.id}/complete`, "POST", {});
+      const completed = await api<{ id: string; state: string }>(
+        `/profile/picture/${initial.id}/complete`,
+        "POST",
+        {},
+      );
+      if (completed.id !== initial.id || completed.state !== "APPROVED")
+        throw new Error("Your picture could not be saved. Please try again.");
       await load();
       if (mounted.current)
         setNotice(
@@ -74,31 +89,52 @@ export function ProfilePicture() {
   }
 
   return (
-    <section
-      className="profile-picture-settings"
-      aria-label="Your profile picture"
-    >
-      <h2>Profile picture</h2>
-      <p>
-        Your picture is private. After ten qualifying messages each in a quick
-        chat, you can choose to show it to that person.
-      </p>
-      {loading ? (
-        <p role="status">Loading your picture…</p>
-      ) : status?.picture ? (
-        <img
-          className="profile-picture-preview"
-          src={`${status.picture.url}?v=${encodeURIComponent(status.picture.id)}`}
-          alt="Your private profile picture"
-        />
-      ) : (
-        <p className="muted">No profile picture saved.</p>
-      )}
-      {status?.uploadAvailable && (
-        <label className="profile-picture-upload">
-          {status.picture ? "Replace profile picture" : "Add profile picture"}
+    <div className="profile-status">
+      <div
+        className="profile-avatar-editor"
+        role="group"
+        aria-label="Your profile picture"
+      >
+        <button
+          type="button"
+          className="avatar large profile-avatar-button"
+          aria-label={
+            status?.picture
+              ? "Change profile picture"
+              : "Upload profile picture"
+          }
+          aria-describedby={helpId}
+          aria-busy={busy}
+          disabled={loading || busy || !status?.uploadAvailable}
+          onClick={() => picker.current?.click()}
+        >
+          {status?.picture ? (
+            <img
+              className="profile-picture-preview"
+              src={`${status.picture.url}?v=${encodeURIComponent(status.picture.id)}`}
+              alt="Your private profile picture"
+            />
+          ) : (
+            <span aria-hidden="true">
+              {displayName[0]?.toUpperCase() || "?"}
+            </span>
+          )}
+          <span className="profile-avatar-camera" aria-hidden="true">
+            <Camera size={14} />
+          </span>
+        </button>
+        <span className="profile-avatar-caption" aria-hidden="true">
+          {status?.picture ? "Change photo" : "Add photo"}
+        </span>
+        {status?.uploadAvailable && (
           <input
+            ref={picker}
             type="file"
+            hidden
+            tabIndex={-1}
+            aria-label={
+              status.picture ? "Replace profile picture" : "Add profile picture"
+            }
             accept="image/jpeg,image/png,image/webp"
             disabled={busy}
             onChange={(event) => {
@@ -107,38 +143,42 @@ export function ProfilePicture() {
               if (file) void upload(file);
             }}
           />
-          <small>
-            JPEG, PNG or WebP, up to 5 MB. Your picture is checked before it is
-            saved.
-          </small>
-        </label>
-      )}
-      {status && !status.uploadAvailable && (
-        <p className="muted">Picture uploads are currently unavailable.</p>
-      )}
-      {busy && <p role="status">Uploading and checking your picture…</p>}
-      {error && <p role="alert">{error}</p>}
-      {error && !status && (
-        <button
-          type="button"
-          className="button secondary small"
-          disabled={loading}
-          onClick={async () => {
-            setLoading(true);
-            setError("");
-            try {
-              await load();
-            } catch (e) {
-              if (mounted.current) setError((e as Error).message);
-            } finally {
-              if (mounted.current) setLoading(false);
-            }
-          }}
-        >
-          Retry loading picture
-        </button>
-      )}
-      {notice && <p role="status">{notice}</p>}
-    </section>
+        )}
+      </div>
+      {children}
+      <div className="profile-picture-feedback">
+        <p id={helpId} className="muted">
+          Click your photo to upload or replace it. JPEG, PNG or WebP, up to 5
+          MB. Your photo stays private until you choose to share it.
+        </p>
+        {loading && <p role="status">Loading your picture…</p>}
+        {status && !status.uploadAvailable && (
+          <p className="muted">Picture uploads are currently unavailable.</p>
+        )}
+        {busy && <p role="status">Uploading your picture…</p>}
+        {error && <p role="alert">{error}</p>}
+        {error && !status && (
+          <button
+            type="button"
+            className="button secondary small"
+            disabled={loading}
+            onClick={async () => {
+              setLoading(true);
+              setError("");
+              try {
+                await load();
+              } catch (e) {
+                if (mounted.current) setError((e as Error).message);
+              } finally {
+                if (mounted.current) setLoading(false);
+              }
+            }}
+          >
+            Retry loading picture
+          </button>
+        )}
+        {notice && <p role="status">{notice}</p>}
+      </div>
+    </div>
   );
 }

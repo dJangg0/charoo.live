@@ -6,16 +6,26 @@ type PictureStatus = {
   uploadAvailable: boolean;
 };
 
+type UploadPhase = "preparing" | "uploading" | "checking";
+
 export function ProfilePicture() {
   const [status, setStatus] = useState<PictureStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>("preparing");
+  const [pictureLoading, setPictureLoading] = useState(false);
+  const [pictureLoadError, setPictureLoadError] = useState(false);
+  const [pictureRetry, setPictureRetry] = useState(0);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const mounted = useRef(true);
   async function load() {
     const next = await api<PictureStatus>("/profile/picture");
-    if (mounted.current) setStatus(next);
+    if (mounted.current) {
+      setStatus(next);
+      setPictureLoadError(false);
+      setPictureLoading(!!next.picture);
+    }
   }
   useEffect(() => {
     mounted.current = true;
@@ -33,8 +43,10 @@ export function ProfilePicture() {
 
   async function upload(file: File) {
     setBusy(true);
+    setUploadPhase("preparing");
     setError("");
     setNotice("");
+    setPictureLoadError(false);
     try {
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type))
         throw new Error("Choose a JPEG, PNG or WebP picture.");
@@ -45,6 +57,7 @@ export function ProfilePicture() {
         "POST",
         { mime: file.type, size: file.size },
       );
+      if (mounted.current) setUploadPhase("uploading");
       const response = await fetch(initial.url, {
         method: "PUT",
         credentials: "include",
@@ -60,6 +73,7 @@ export function ProfilePicture() {
           result.error || "Picture upload failed. Please try again.",
         );
       }
+      if (mounted.current) setUploadPhase("checking");
       await api(`/profile/picture/${initial.id}/complete`, "POST", {});
       await load();
       if (mounted.current)
@@ -73,6 +87,18 @@ export function ProfilePicture() {
     }
   }
 
+  const retryPicturePreview = () => {
+    setPictureLoadError(false);
+    setPictureLoading(true);
+    setPictureRetry((attempt) => attempt + 1);
+  };
+
+  const uploadStatus = {
+    preparing: "Preparing your picture upload…",
+    uploading: "Uploading your picture…",
+    checking: "Upload complete. Checking your picture for safety…",
+  }[uploadPhase];
+
   return (
     <section
       className="profile-picture-settings"
@@ -84,19 +110,53 @@ export function ProfilePicture() {
         chat, you can choose to show it to that person.
       </p>
       {loading ? (
-        <p role="status">Loading your picture…</p>
+        <p className="profile-picture-progress" role="status">
+          <span className="profile-picture-spinner" aria-hidden="true" />
+          <span>Loading your saved picture…</span>
+        </p>
       ) : status?.picture ? (
-        <img
-          className="profile-picture-preview"
-          src={`${status.picture.url}?v=${encodeURIComponent(status.picture.id)}`}
-          alt="Your private profile picture"
-        />
+        <div className="profile-picture-preview-shell">
+          {!pictureLoadError && (
+            <img
+              className="profile-picture-preview"
+              src={`${status.picture.url}?pictureId=${encodeURIComponent(status.picture.id)}&v=${encodeURIComponent(`${status.picture.id}-${pictureRetry}`)}`}
+              alt="Your private profile picture"
+              onLoad={() => setPictureLoading(false)}
+              onError={() => {
+                setPictureLoading(false);
+                setPictureLoadError(true);
+              }}
+            />
+          )}
+          {pictureLoading && !pictureLoadError && (
+            <div className="profile-picture-preview-loading" role="status">
+              <span className="profile-picture-spinner" aria-hidden="true" />
+              <span>Loading picture…</span>
+            </div>
+          )}
+          {pictureLoadError && (
+            <div className="profile-picture-preview-error" role="alert">
+              <span>Couldn’t load your picture preview.</span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={retryPicturePreview}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+        </div>
       ) : (
         <p className="muted">No profile picture saved.</p>
       )}
       {status?.uploadAvailable && (
         <label className="profile-picture-upload">
-          {status.picture ? "Replace profile picture" : "Add profile picture"}
+          {busy
+            ? "Saving profile picture…"
+            : status.picture
+              ? "Replace profile picture"
+              : "Add profile picture"}
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
@@ -116,7 +176,16 @@ export function ProfilePicture() {
       {status && !status.uploadAvailable && (
         <p className="muted">Picture uploads are currently unavailable.</p>
       )}
-      {busy && <p role="status">Uploading and checking your picture…</p>}
+      {busy && (
+        <p
+          className="profile-picture-progress"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="profile-picture-spinner" aria-hidden="true" />
+          <span>{uploadStatus}</span>
+        </p>
+      )}
       {error && <p role="alert">{error}</p>}
       {error && !status && (
         <button

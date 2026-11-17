@@ -1080,6 +1080,75 @@ dialog label {
 .profile-picture-settings > p {
   margin: 10px 0;
 }
+.profile-picture-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.profile-picture-progress > span:last-child {
+  min-width: 0;
+}
+.profile-picture-spinner {
+  display: inline-block;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--line);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: profile-picture-spin 0.8s linear infinite;
+}
+.profile-picture-preview-shell {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  min-width: 128px;
+  min-height: 128px;
+  max-width: 100%;
+  margin: 6px 0;
+}
+.profile-picture-preview-shell .profile-picture-preview {
+  margin: 0;
+}
+.profile-picture-preview-loading,
+.profile-picture-preview-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  text-align: center;
+  font-size: 12px;
+}
+.profile-picture-preview-loading {
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+.profile-picture-preview-error {
+  overflow-wrap: anywhere;
+}
+@keyframes profile-picture-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .profile-picture-spinner {
+    animation: none;
+    border-color: var(--text);
+    opacity: 0.65;
+  }
+}
 .profile-picture-upload {
   display: grid;
   gap: 8px;
@@ -4462,6 +4531,13 @@ h3 {
   color: var(--muted);
   font-size: 11px;
 }
+.reconnect-notice-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
 .conversation-list {
   border-radius: 4px;
   overflow: hidden;
@@ -4691,6 +4767,13 @@ h3 {
   }
 }
 @media (max-width: 640px) {
+  .reconnect-notice {
+    flex-wrap: wrap;
+  }
+  .reconnect-notice-actions {
+    flex-basis: 100%;
+    gap: 8px;
+  }
   :root {
     --topbar-height: calc(62px + env(safe-area-inset-top, 0px));
     --mobile-nav-height: 78px;
@@ -5156,7 +5239,7 @@ canvas {
 }
 .picture-sharing-actions .button,
 .profile-picture-settings .button {
-  min-height: 44px;
+  min-height: 45px;
   max-width: 100%;
   white-space: normal;
 }

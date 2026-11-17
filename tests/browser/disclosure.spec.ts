@@ -366,6 +366,12 @@ test("profile picture upload waits for approval and restores the private preview
   const pictureId = "60000000-0000-4000-8000-000000000001";
   let saved = false;
   const operations: string[] = [];
+  await page.route("**/api/profile/picture/content**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#ddd1eb"/></svg>',
+    }),
+  );
   await page.route("**/api/profile/picture", (route) =>
     route.fulfill({
       json: {
@@ -415,8 +421,51 @@ test("profile picture upload waits for approval and restores the private preview
   ).toBeVisible();
   await expect(
     page.getByAltText("Your private profile picture"),
-  ).toHaveAttribute("src", `/api/profile/picture/content?v=${pictureId}`);
+  ).toHaveAttribute(
+    "src",
+    `/api/profile/picture/content?pictureId=${pictureId}&v=${pictureId}-0`,
+  );
   expect(operations).toEqual(["init", "upload", "approve"]);
+});
+
+test("private profile picture preview can be retried after it fails to load", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  const pictureId = "60000000-0000-4000-8000-000000000001";
+  let attempts = 0;
+  await page.route("**/api/profile/picture", (route) =>
+    route.fulfill({
+      json: {
+        picture: { id: pictureId, url: "/api/profile/picture/content" },
+        uploadAvailable: false,
+      },
+    }),
+  );
+  await page.route("**/api/profile/picture/content**", (route) => {
+    attempts++;
+    if (attempts === 1) return route.fulfill({ status: 503 });
+    return route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#ddd1eb"/></svg>',
+    });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Your profile", exact: true })
+    .click();
+
+  const panel = page.getByLabel("Your profile picture", { exact: true });
+  await expect(
+    panel.getByText("Couldn’t load your picture preview.", { exact: true }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(
+    panel.getByAltText("Your private profile picture"),
+  ).toHaveJSProperty("naturalHeight", 80);
+  expect(attempts).toBe(2);
 });
 
 test("a rejected picture upload keeps the existing picture and allows retry", async ({
@@ -425,6 +474,12 @@ test("a rejected picture upload keeps the existing picture and allows retry", as
 }) => {
   await visualFixture(context);
   const pictureId = "60000000-0000-4000-8000-000000000001";
+  await page.route("**/api/profile/picture/content**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#ddd1eb"/></svg>',
+    }),
+  );
   await page.route("**/api/profile/picture", (route) =>
     route.fulfill({
       json: {
@@ -449,9 +504,11 @@ test("a rejected picture upload keeps the existing picture and allows retry", as
     mimeType: "image/png",
     buffer: Buffer.from([1, 2, 3, 4]),
   });
-  await expect(page.getByRole("alert")).toHaveText(
-    "Picture upload is temporarily unavailable",
-  );
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Picture upload is temporarily unavailable" }),
+  ).toHaveText("Picture upload is temporarily unavailable");
   await expect(page.getByAltText("Your private profile picture")).toBeVisible();
   await expect(page.getByLabel("Replace profile picture")).toBeEnabled();
 });

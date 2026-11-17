@@ -8,14 +8,14 @@ Sanitized summary for the latest Cloudflare staging milestone. Root [SRS.md](../
 | Repository / workspace | Charoo / `denver` |
 | Branch / target | `dJangg0/asl-profile-display-chat-fix` / `origin/main` |
 | Starting commit | `f9fff705664d8079f6860acc988c72914e2dfce6` |
-| Objective / state | Review optimistic message states, quoted reply previews, and the compact per-person ASL progress bar above quick-chat history. Fixed a room-switch pending-message reconciliation defect and added a browser regression. No deployment, migration or external action. Prior staging milestone notes follow below. |
+| Objective / state | Implement and review optimistic message states, quoted reply previews, and the compact per-person ASL progress bar above quick-chat history. Fixed a room-switch pending-message reconciliation defect and added browser regressions. Three feature commits are pushed; [PR #2](https://github.com/dJangg0/charoo.live/pull/2) is open. No deployment or migration. Prior staging milestone notes follow below. |
 
 ## Current task in denver (2026-11-17)
 
 - Screenshot showed quick-chat counts You 4/5 and Stranger 3/5. The five-each milestone was not met. Qualifying content also requires at least eight normalized characters, four distinct characters, a three-second gap and a new content fingerprint. Peer ASL remains subject to the owner's visibility preference.
 - Source review confirmed room WebSockets carry authenticated updates/typing; message writes use REST with a stable client ID, transactionally committed before durable outbox projection/event delivery. Keep this transport split.
 - Local changes: optimistic bubbles show `Sending…`, become `Sent` pending authoritative history refresh, and offer retry only after a failed write; post-ack history refresh is background work. Refresh now targets the room that accepted the message and reconciles pending IDs when a room is reopened. Reply history includes a privacy-checked quoted message preview. Quick-chat progress is a compact two-person bar above history, with counts to five each; permitted age/sex/location appears after qualification.
-- `pnpm typecheck`, `git diff --check`, and all 10 `tests/browser/disclosure.spec.ts` scenarios pass, including the delayed-send room-switch and quoted-reply regressions. Other Vitest/browser suites, responsive follow-up, Cloudflare runtime, deployment and migration were not run. Changes remain uncommitted; no remote action was performed.
+- Commits: `b860984` ASL progress, `e4ec997` quoted replies, and `58f3b44` delivery states/reconciliation. Pushed to `origin/dJangg0/asl-profile-display-chat-fix`; PR #2 is open. `pnpm typecheck`, `git diff --check`, changed-file Prettier checks, and all 10 `tests/browser/disclosure.spec.ts` scenarios pass, including the delayed-send room-switch and quoted-reply regressions. Other Vitest/browser suites, responsive follow-up, Cloudflare runtime, deployment and migration were not run.
 
 ## Earlier staging milestone (2026-11-16)
 

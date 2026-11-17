@@ -54,7 +54,7 @@ async function openQuickChat(page: Page) {
   await expect(page.locator(".chat")).toBeVisible();
 }
 
-test("ASL progress is per person and picture invitation waits for ten each", async ({
+test("ASL progress is shown above chat and details appear after both qualify", async ({
   page,
   context,
 }) => {
@@ -66,9 +66,15 @@ test("ASL progress is per person and picture invitation waits for ten each", asy
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
   await openQuickChat(page);
-  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
-  await expect(sharing).toContainText("You 4/5 · Stranger 5/5");
-  await expect(sharing).not.toContainText("Picture sharing is now available.");
+  const progress = page.getByLabel("ASL reveal progress", { exact: true });
+  await expect(progress).toContainText("5 qualifying messages each");
+  await expect(progress).toContainText(/You\s*4\/5/);
+  await expect(progress).toContainText(/Stranger\s*5\/5/);
+  await expect(page.getByRole("progressbar", { name: "You" })).toHaveAttribute(
+    "aria-valuenow",
+    "4",
+  );
+  await expect(page.locator(".quick-chat-disclosure")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toHaveCount(0);
@@ -79,8 +85,12 @@ test("ASL progress is per person and picture invitation waits for ten each", asy
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("A new hello for you");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(sharing).toContainText("ASL milestone reached.");
-  await expect(sharing).toContainText("Age 31 · Woman · Manila");
+  await expect(progress).toHaveCount(0);
+  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
+  await expect(sharing).toContainText(
+    "Stranger: Age 31 · Sex Woman · Location Manila",
+  );
+  await expect(sharing).not.toContainText(/\d\/5/);
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toHaveCount(0);

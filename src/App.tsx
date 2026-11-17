@@ -3,7 +3,7 @@ import { RoomSidebar } from "./RoomSidebar";
 import { JoinRoomForm } from "./JoinRoomForm";
 import { ThemeSettings } from "./ThemeSettings";
 import { ProfilePicture } from "./ProfilePicture";
-import { QuickChatDisclosure } from "./QuickChatDisclosure";
+import { QuickChatDisclosure, QuickChatProgress } from "./QuickChatDisclosure";
 import { useTheme } from "./useTheme";
 import {
   useEffect,
@@ -2396,14 +2396,12 @@ export function App() {
                     ? "Your next hello"
                     : active.title}
                 </h2>
-                <p>
-                  {active.type === "STRANGER"
-                    ? active.asl_revealed
-                      ? "ASL milestone reached · your preferences apply"
-                      : "Identity hidden · get to know each other first"
-                    : `${active.online} active · ${active.type === "SHARED_GROUP" ? "Room joined by link" : "Verified community"}`}
-                  {isOwner && <span className="label">YOU’RE THE HOST</span>}
-                </p>
+                {active.type !== "STRANGER" && (
+                  <p>
+                    {`${active.online} active · ${active.type === "SHARED_GROUP" ? "Room joined by link" : "Verified community"}`}
+                    {isOwner && <span className="label">YOU’RE THE HOST</span>}
+                  </p>
+                )}
               </div>
               {isOwner && active.type === "SHARED_GROUP" && (
                 <button
@@ -2442,6 +2440,12 @@ export function App() {
             </div>
             <div className="chat-layout">
               <div className="chat-main">
+                {active.type === "STRANGER" && user && !active.asl_revealed && (
+                  <QuickChatProgress
+                    userId={user.id}
+                    progress={active.aslProgress || []}
+                  />
+                )}
                 <div className="messages" aria-live="polite">
                   {messageNext && (
                     <button
@@ -2572,7 +2576,6 @@ export function App() {
                       key={active.id}
                       userId={user.id}
                       aslRevealed={Boolean(active.asl_revealed)}
-                      progress={active.aslProgress || []}
                       participants={active.participants || []}
                       sharing={active.pictureSharing}
                       busy={busy}

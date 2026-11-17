@@ -1142,14 +1142,26 @@ export function App() {
     choosePage("groups");
     setModal(userRef.current ? "joinProfile" : "guest");
   };
-  const request = (targetId: string, kind: string) =>
+  const request = (targetId: string, kind: string, sourceRoomId?: string) =>
     act(async () => {
       await api("/requests", "POST", {
         targetId,
         kind,
-        roomId: activeRef.current?.id,
+        roomId: sourceRoomId || activeRef.current?.id,
       });
       notify("Request sent. They decide whether to accept.");
+      if (kind === "RECONNECT") background(loadSocial);
+    });
+  const respondSocialRequest = (id: string, accept: boolean) =>
+    act(async () => {
+      const result = await api(`/requests/${id}/respond`, "POST", { accept });
+      background(loadSocial);
+      if (result.roomId) {
+        await openRoom(result.roomId);
+        notify("Reconnect accepted. Your private chat is ready.");
+      } else if (!accept) {
+        notify("Reconnect declined. The requester's past quick chat was removed from their archives.");
+      }
     });
   const moderation = (action: string, targetId?: string, reason?: string) =>
     act(async () => {
@@ -2056,6 +2068,20 @@ export function App() {
                           })}
                         </small>
                       </span>
+                      <div className="reconnect-notice-actions">
+                        <button
+                          className="button small"
+                          onClick={() => respondSocialRequest(request.id, true)}
+                        >
+                          Accept
+                        </button>
+                        <button
+                          className="text-button"
+                          onClick={() => respondSocialRequest(request.id, false)}
+                        >
+                          Decline
+                        </button>
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -2096,19 +2122,30 @@ export function App() {
                         </span>
                         <button
                           className="button secondary small past-chat-reconnect"
-                          disabled
+                          disabled={
+                            !user.verified ||
+                            !match.reconnectable ||
+                            match.reconnect_pending
+                          }
                           title={
                             !user.verified
                               ? "Verify your account before reconnecting"
                               : !match.reconnectable
                                 ? "Reconnect is unavailable for this account"
-                                : "Paid reconnect will be available when checkout is set up"
+                                : match.reconnect_pending
+                                  ? "Your reconnect request is waiting for their answer"
+                                  : "Send a reconnect request"
+                          }
+                          onClick={() =>
+                            request(match.id, "RECONNECT", match.archive_id)
                           }
                         >
                           {!user.verified
                             ? "Verify to reconnect"
                             : match.reconnectable
-                              ? "Pay to reconnect"
+                              ? match.reconnect_pending
+                                ? "Request pending"
+                                : "Request reconnect"
                               : "Unavailable"}
                         </button>
                       </article>
@@ -2154,12 +2191,6 @@ export function App() {
                       </span>
                       <button
                         className="button small"
-                        disabled={r.kind === "RECONNECT"}
-                        title={
-                          r.kind === "RECONNECT"
-                            ? "Paid reconnect checkout is not configured yet"
-                            : undefined
-                        }
                         onClick={() =>
                           act(async () => {
                             const result = await api(

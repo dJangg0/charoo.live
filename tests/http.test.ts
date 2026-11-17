@@ -572,4 +572,48 @@ describe("HTTP API", () => {
     ).json();
     expect(filtered.length).toBe(1);
   });
+  it("marks the exact archived chat with a pending reconnect", async () => {
+    const f = await fixture(),
+      requester = await f.guest(true),
+      recipient = await f.guest(true),
+      sourceRoomId = crypto.randomUUID(),
+      otherRoomId = crypto.randomUUID(),
+      now = iso(),
+      expiresAt = iso(Date.now() + 86400000);
+    for (const roomId of [sourceRoomId, otherRoomId])
+      await f.db
+        .prepare(
+          "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
+        )
+        .bind(
+          requester.actor.userId,
+          recipient.actor.userId,
+          roomId,
+          now,
+          now,
+          expiresAt,
+        )
+        .run();
+    await f.app.command(requester.actor, "social.create", {
+      kind: "RECONNECT",
+      targetId: recipient.actor.userId,
+      roomId: sourceRoomId,
+    });
+
+    const history: any = await (
+      await request(f, "/quick-chat-history", "GET", undefined, requester)
+    ).json();
+    expect(history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          archive_id: sourceRoomId,
+          reconnect_pending: 1,
+        }),
+        expect.objectContaining({
+          archive_id: otherRoomId,
+          reconnect_pending: 0,
+        }),
+      ]),
+    );
+  });
 });

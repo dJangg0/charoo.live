@@ -150,7 +150,7 @@ The assistant sends a bounded style prompt without conversation history. LiveKit
 
 ## Cloudflare deployment
 
-`wrangler.cloudflare.jsonc` deploys the `charoo-live` Worker with its Durable Objects to Cloudflare, using the existing `charoo-d1-db` D1 database and `charoo-media` R2 bucket. The browser origin is **https://charoo-live.shy-star-eff8.workers.dev**; `vars.WEB_ORIGIN` must match it exactly. This configuration is separate from local Celld development and the fleet deployment below.
+`wrangler.cloudflare.jsonc` deploys the `charoo-live` Worker with its Durable Objects to Cloudflare, using the existing `charoo-d1-db` D1 database and `charoo-media` R2 bucket. Its intended production browser origin is **https://chat.charoo.live**, and `vars.WEB_ORIGIN` is set to that exact origin. Configure `chat.charoo.live` as a custom domain for this Worker in Cloudflare. This configuration is separate from local Celld development and the fleet deployment below.
 
 ### Staging
 
@@ -166,6 +166,14 @@ pnpm exec wrangler deploy --config wrangler.staging.jsonc --secrets-file .secret
 ```
 
 Later staging deployments can use `pnpm run deploy:cloudflare:staging`. Provider integrations remain unavailable until their staging credentials and nonsecret settings are configured. Use staging data only; the current implementation review lists open access-control findings.
+
+### Branch promotion and CI
+
+GitHub Actions runs the `Check` workflow for pushes to `staging` and `main`, and pull requests targeting either branch. The workflow runs application checks and a Celld dry run; it does not deploy either Cloudflare Worker.
+
+For Cloudflare Workers Builds, set the production Worker's production branch to `main` and the staging Worker's production branch to `staging`. Set each Worker's deploy command to its matching script: `pnpm run deploy:cloudflare` for production and `pnpm run deploy:cloudflare:staging` for staging. Those scripts select the corresponding Wrangler configuration and resource set.
+
+For strict isolation, turn off **Enable Preview Builds** in the production Worker's **Settings → Builds → Branch control**. Otherwise, Cloudflare can run a preview build for a push to `staging`; a preview does not replace the active production deployment, but it can still appear as a production Worker build/check. Turn previews off for staging too if it should build only from `staging`. With automatic deployment enabled, pushing to `staging` updates staging and merging into `main` is the production promotion action. To deploy production manually after testing, disable automatic deployment for the production Worker and run `pnpm run deploy:cloudflare` yourself.
 
 `pnpm run build:cloudflare` uses the public production settings from that configuration for the generated security headers, including LiveKit connection origins when configured. The secrets file is only passed to Wrangler for upload.
 

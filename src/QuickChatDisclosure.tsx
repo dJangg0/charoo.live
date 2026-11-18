@@ -1,4 +1,4 @@
-import { Eye, LockKeyhole } from "lucide-react";
+import { Eye } from "lucide-react";
 
 export interface PictureSharing {
   eligible: boolean;
@@ -11,10 +11,64 @@ export interface PictureSharing {
   participants: { id: string; url: string }[];
 }
 
+export function QuickChatProgress({
+  userId,
+  progress,
+}: {
+  userId: string;
+  progress: { id: string; count: number }[];
+}) {
+  const people = [
+    { id: userId, label: "You" },
+    {
+      id: progress.find((person) => person.id !== userId)?.id || "peer",
+      label: "Stranger",
+    },
+  ];
+
+  return (
+    <section className="quick-chat-progress" aria-label="ASL reveal progress">
+      <div className="quick-chat-progress-heading">
+        <strong>ASL unlock</strong>
+        <span>5 qualifying messages each</span>
+      </div>
+      <div className="quick-chat-progress-people">
+        {people.map((person) => {
+          const count = Math.min(
+            5,
+            Math.max(
+              0,
+              progress.find((item) => item.id === person.id)?.count || 0,
+            ),
+          );
+          return (
+            <div className="quick-chat-progress-person" key={person.id}>
+              <div className="quick-chat-progress-label">
+                <span>{person.label}</span>
+                <span>{count}/5</span>
+              </div>
+              <div
+                className="quick-chat-progress-track"
+                role="progressbar"
+                aria-label={person.label}
+                aria-valuemin={0}
+                aria-valuemax={5}
+                aria-valuenow={count}
+                aria-valuetext={`${count} of 5 qualifying messages`}
+              >
+                <span style={{ width: `${(count / 5) * 100}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export function QuickChatDisclosure({
   userId,
   aslRevealed,
-  progress,
   participants,
   sharing,
   busy,
@@ -22,7 +76,6 @@ export function QuickChatDisclosure({
 }: {
   userId: string;
   aslRevealed: boolean;
-  progress: { id: string; count: number }[];
   participants: {
     id: string;
     asl?: { age: number | null; gender: string; region: string } | null;
@@ -31,40 +84,36 @@ export function QuickChatDisclosure({
   busy: boolean;
   onDecision: (decision: "approved" | "declined", pictureId?: string) => void;
 }) {
-  const ownCount = progress.find((p) => p.id === userId)?.count || 0;
-  const peerCount = progress.find((p) => p.id !== userId)?.count || 0;
+  const asl = aslRevealed
+    ? participants.flatMap((person) => {
+        const values = person.asl
+          ? [
+              person.asl.age ? `Age ${person.asl.age}` : "",
+              person.asl.gender ? `Sex ${person.asl.gender}` : "",
+              person.asl.region ? `Location ${person.asl.region}` : "",
+            ].filter(Boolean)
+          : [];
+        return values.length
+          ? [
+              {
+                id: person.id,
+                label: person.id === userId ? "You" : "Stranger",
+                values,
+              },
+            ]
+          : [];
+      })
+    : [];
+  if (!asl.length && !sharing?.eligible) return null;
+
   return (
     <div className="quick-chat-disclosure" aria-label="Quick chat sharing">
-      <div className="disclosure-progress">
-        <LockKeyhole size={16} aria-hidden="true" />
-        <p>
-          {aslRevealed
-            ? "ASL milestone reached. Each person’s privacy preferences apply."
-            : `ASL after 5 qualifying messages each · You ${Math.min(ownCount, 5)}/5 · Stranger ${Math.min(peerCount, 5)}/5`}
+      {asl.map((person) => (
+        <p className="disclosure-asl" key={person.id}>
+          <strong>{person.label}:</strong> {person.values.join(" · ")}
         </p>
-      </div>
-      {aslRevealed &&
-        participants.map((person) => {
-          const values = person.asl
-            ? [
-                person.asl.age ? `Age ${person.asl.age}` : "",
-                person.asl.gender,
-                person.asl.region,
-              ].filter(Boolean)
-            : [];
-          return values.length ? (
-            <p className="disclosure-asl" key={person.id}>
-              <strong>{person.id === userId ? "You" : "Stranger"}:</strong>{" "}
-              {values.join(" · ")}
-            </p>
-          ) : null;
-        })}
-      {!sharing?.eligible ? (
-        <p className="disclosure-hint">
-          Picture sharing becomes available after 10 qualifying messages each.
-          Your picture stays hidden until you choose to share it.
-        </p>
-      ) : (
+      ))}
+      {sharing?.eligible && (
         <section
           className="picture-sharing-notice"
           aria-label="Profile picture sharing"

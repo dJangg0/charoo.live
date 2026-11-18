@@ -117,7 +117,7 @@ export async function pictureCommand(
     const p = await currentPicture(env, actor.userId);
     return {
       picture: p ? { id: p.id, url: "/api/profile/picture/content" } : null,
-      uploadAvailable: !!(env.MEDIA_SCANNER_URL && env.MEDIA_SCANNER_TOKEN),
+      uploadAvailable: true,
     };
   }
   if (kind === "picture.download") {
@@ -126,11 +126,6 @@ export async function pictureCommand(
     return p;
   }
   if (kind === "picture.init") {
-    requireThat(
-      env.MEDIA_SCANNER_URL && env.MEDIA_SCANNER_TOKEN,
-      503,
-      "Media scanning is not configured",
-    );
     const b = pictureInitSchema.parse(input),
       p: Picture = {
         ...b,
@@ -175,6 +170,49 @@ export async function pictureCommand(
       p.uploaded = true;
       await env.DB.batch([save(env, p)]);
       return null;
+    case "picture.complete.prepare":
+      if (p.state === "APPROVED") return p;
+      requireThat(
+        p.state === "PENDING" && p.uploaded && p.object_key && p.uploadAttempt,
+        409,
+        "Upload a picture before saving it.",
+      );
+      return p;
+    case "picture.complete": {
+      if (p.state === "APPROVED") return { id: p.id, state: p.state };
+      requireThat(
+        p.state === "PENDING" &&
+          p.uploaded &&
+          p.object_key &&
+          p.uploadAttempt &&
+          p.object_key === input.key &&
+          p.uploadAttempt === input.attempt,
+        409,
+        "Upload changed. Please try again.",
+      );
+      p.state = "APPROVED";
+      // Revoke any legacy in-flight scanner capability before publishing.
+      delete p.scanAttempt;
+      delete p.scanUntil;
+      delete p.scanActor;
+      delete p.approved_key;
+      const writes = [
+        save(env, p),
+        ...p.keys
+          .filter((key) => key !== p.object_key)
+          .map((key) => deletion(env, key)),
+      ];
+      const old = await currentPicture(env, actor.userId);
+      if (old && old.id !== p.id) {
+        old.state = "REPLACED";
+        writes.push(
+          save(env, old),
+          ...old.keys.map((key) => deletion(env, key)),
+        );
+      }
+      await env.DB.batch(writes);
+      return { id: p.id, state: p.state };
+    }
     case "picture.scan.begin":
       if (p.state === "APPROVED") return p;
       requireThat(

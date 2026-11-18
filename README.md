@@ -44,7 +44,7 @@ Quick chat searches for up to two minutes, then cancels the queue if no match is
 
 After **five qualifying messages from each person**, quick chat reveals the ASL fields allowed by each person's privacy settings. After **ten each**, both see that profile-picture sharing is available. Each person independently chooses **Show my profile picture** or **Not now**; declining keeps a share-later action available in that chat. Pictures remain private until their owner approves. A new match starts with fresh progress and consent. Qualifying messages must be distinct and meaningful; rapid/repeated messages and retries do not inflate progress.
 
-Add or replace a private picture from **Your profile** (JPEG, PNG or WebP, up to 5 MB). Uploads require the existing configured media scanner and only save its approved output. Replacing a picture never shares the replacement under an earlier consent. Apply the additive `0005_profile_pictures.sql` D1 migration before deploying this feature; the legacy ASL threshold/duration settings no longer control quick-chat milestones.
+Click the photo/avatar in the top card on **Your profile** to add or replace a private picture (JPEG, PNG or WebP, up to 5 MB). You can change it again anytime. Edit **Bio** in the profile form (up to 300 characters), then select **Save profile**; the saved bio appears in your own profile card. Profile-photo uploads use the existing authenticated backend and private R2 storage, with server-side file-format and size checks; no scanner configuration is needed. Replacing a picture never shares the replacement under an earlier consent. Apply the additive `0005_profile_pictures.sql` D1 migration before deploying this feature; the legacy ASL threshold/duration settings no longer control quick-chat milestones.
 
 Inside a room, the left sidebar shows members, invitation tools, and host controls. Back restores the main navigation; on mobile, the Members button opens the same sidebar. Hosts can mute members for 30 minutes or unmute them immediately. Muted members can read but cannot send messages, reactions, or attachments. Block/Unblock hides or restores a person's messages for the user who clicks it and stops private interactions.
 
@@ -132,7 +132,7 @@ Providers are optional; missing integrations return an unavailable response. AI 
 
 Email links and Google callbacks retain shared-room invitations. Google uses PKCE, browser/session-bound one-use state and nonce-checked signed ID tokens. Gmail and Workspace identities can link automatically; other mailboxes require email verification first. Guest upgrades keep their identity. Signing into an existing email account preserves that account's history.
 
-Uploads use authenticated Worker endpoints with origin and CSRF checks. R2 keys remain private. The scanner receives the retained JSON contract:
+Uploads use authenticated Worker endpoints with origin and CSRF checks. R2 keys remain private. Profile photos save directly after format/size validation; scanning below applies to room attachments. The scanner receives the retained JSON contract:
 
 ```json
 {
@@ -151,6 +151,14 @@ The assistant sends a bounded style prompt without conversation history. LiveKit
 ## Cloudflare deployment
 
 `wrangler.cloudflare.jsonc` deploys the `charoo-live` Worker with its Durable Objects to Cloudflare, using the existing `charoo-d1-db` D1 database and `charoo-media` R2 bucket. Its intended production browser origin is **https://chat.charoo.live**, and `vars.WEB_ORIGIN` is set to that exact origin. Configure `chat.charoo.live` as a custom domain for this Worker in Cloudflare. This configuration is separate from local Celld development and the fleet deployment below.
+
+### Pull request previews
+
+Configure the connected Cloudflare Worker Build with build command `pnpm run build:cloudflare` and deploy command `pnpm run preview:cloudflare`. The deploy script explicitly selects `wrangler.cloudflare.jsonc`; a bare `wrangler preview` can select the default `wrangler.jsonc` instead. Set these commands under **Workers & Pages → charoo-live → Settings → Builds**.
+
+The `previews` bindings in `wrangler.cloudflare.jsonc` keep PR code off production D1 and R2. Each Preview receives isolated Durable Object storage; previews share the staging D1 and media bucket. The Preview queue producer points to the staging dead-letter queue so staging's normal job consumer does not run Preview jobs. Use synthetic data in these shared staging resources. Queue consumers and cron triggers do not run inside Worker Previews.
+
+Worker Previews do not inherit production secrets. Add a dedicated synthetic-data Preview base secret for `MESSAGE_KEY` with `pnpm exec wrangler preview base-config secret put MESSAGE_KEY --config wrangler.cloudflare.jsonc`; do not reuse the production or staging key. `PREVIEW_MODE` is enabled only in the `previews` block and accepts browser requests only when their Origin exactly matches the current Preview request origin. The Preview's configured `WEB_ORIGIN` is the staging URL, so API-generated absolute links still point to staging; provider sign-in and email are not configured for PR Previews.
 
 ### Staging
 

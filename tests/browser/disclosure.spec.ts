@@ -510,7 +510,7 @@ test("profile picture upload waits for approval and restores the private preview
     page.getByAltText("Your private profile picture"),
   ).toHaveAttribute(
     "src",
-    `/api/profile/picture/content?pictureId=${pictureId}&v=${pictureId}-0`,
+    `/api/profile/picture/content?v=${pictureId}`,
   );
   expect(operations).toEqual(["init", "upload", "approve"]);
 });

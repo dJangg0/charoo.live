@@ -117,11 +117,11 @@ export function ProfilePicture({
   }[uploadPhase];
 
   return (
-    <div className="profile-status">
+    <div className="profile-status" role="group" aria-label="Your profile picture">
       <div
         className="profile-avatar-editor"
         role="group"
-        aria-label="Your profile picture"
+        aria-label="Profile picture avatar"
       >
         <button
           type="button"
@@ -139,7 +139,7 @@ export function ProfilePicture({
           {status?.picture && !pictureLoadError ? (
             <img
               className="profile-picture-preview"
-              src={`${status.picture.url}?v=${encodeURIComponent(`${status.picture.id}-${pictureRetry}`)}`}
+              src={`${status.picture.url}?v=${encodeURIComponent(status.picture.id)}${pictureRetry ? `&retry=${pictureRetry}` : ""}`}
               alt="Your private profile picture"
               onLoad={() => setPictureLoading(false)}
               onError={() => {
@@ -190,7 +190,7 @@ export function ProfilePicture({
         )}
         {pictureLoadError && (
           <p role="alert">
-            Couldn’t load your picture preview. {" "}
+            <span>Couldn’t load your picture preview.</span>{" "}
             <button
               type="button"
               className="text-button"

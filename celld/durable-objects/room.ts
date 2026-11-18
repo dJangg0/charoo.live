@@ -1399,6 +1399,7 @@ export class Room extends DurableObject<Env> {
         createdAt: m.created_at,
         clientMessageId: m.client_message_id,
         replyTo: m.reply_to,
+        replyPreview: await this.replyPreview(actor, r, m.reply_to),
         attachmentId: m.attachment_id,
         reactions: grouped,
         readBy: ["STRANGER", "PRIVATE", "CONTACT"].includes(r.type)
@@ -1415,6 +1416,39 @@ export class Room extends DurableObject<Env> {
     }
     await this.permit(actor);
     return { messages: resultRows, next };
+  }
+  private async replyPreview(
+    actor: Actor,
+    room: RoomRecord,
+    replyTo: string | null,
+  ) {
+    if (!replyTo) return null;
+    const target = this.rows(
+      "SELECT id,sender_id,ciphertext FROM charoo_messages WHERE id=?",
+      replyTo,
+    )[0];
+    if (!target) return null;
+    if (
+      target.sender_id !== actor.userId &&
+      (await blocked(this.env, actor.userId, target.sender_id))
+    )
+      return null;
+    const sender = await first(
+      this.env,
+      "SELECT display_name FROM users WHERE id=?",
+      [target.sender_id],
+    );
+    return {
+      id: target.id,
+      senderId: target.sender_id,
+      name:
+        room.type === "STRANGER"
+          ? target.sender_id === actor.userId
+            ? "You"
+            : "Stranger"
+          : sender?.display_name || "Former member",
+      text: await decrypt(target.ciphertext, this.env.MESSAGE_KEY, room.id),
+    };
   }
   private attachments(): Attachment[] {
     return this.rows("SELECT data FROM charoo_attachments").map((r) =>

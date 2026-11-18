@@ -1,9 +1,6 @@
 import type { Hono } from "hono";
-import { SignJWT, jwtVerify } from "jose";
-import { z } from "@charoo/contracts";
 import { coordinator, roomStub } from "../../shared/data";
-import { capabilityKey } from "../../shared/crypto";
-import { HttpError, requireThat, unwrap } from "../../shared/errors";
+import { requireThat, unwrap } from "../../shared/errors";
 import {
   actor,
   body,
@@ -14,106 +11,15 @@ import {
 } from "../../http/context";
 import { boundedBody } from "../media/routes";
 import { pictureInitSchema } from "./state";
+import { validatePicture } from "./image";
 
 const command = (c: HttpContext, kind: string, input: any = {}) =>
   coordinator(c.env).command(actor(c), kind, input).then(unwrap);
-async function scanUrl(c: HttpContext, p: any, operation: "read" | "write") {
-  const token = await new SignJWT({
-    pictureId: p.id,
-    attempt: p.scanAttempt,
-    operation,
-  })
-    .setProtectedHeader({ alg: "HS256", typ: "charoo-profile-scan" })
-    .setAudience("charoo-profile-scan")
-    .setIssuedAt()
-    .setExpirationTime(Math.floor(p.scanUntil / 1000))
-    .sign(await capabilityKey(c.env.MESSAGE_KEY));
-  const url = new URL(
-    `/api/profile/picture/${p.id}/scan/${p.scanAttempt}/${operation === "read" ? "input" : "output"}`,
-    c.env.WEB_ORIGIN,
-  );
-  url.searchParams.set("token", token);
-  return url.toString();
-}
-export async function pictureScanRequest(c: HttpContext) {
-  const id = uuid(c.req.param("id")),
-    attempt = uuid(c.req.param("attempt")),
-    operation =
-      c.req.param("operation") === "input"
-        ? "read"
-        : c.req.param("operation") === "output"
-          ? "write"
-          : null;
-  requireThat(
-    operation && c.req.method === (operation === "read" ? "GET" : "PUT"),
-    405,
-    "Invalid scan operation",
-  );
-  let payload: any;
-  try {
-    ({ payload } = await jwtVerify(
-      c.req.query("token") || "",
-      await capabilityKey(c.env.MESSAGE_KEY),
-      {
-        audience: "charoo-profile-scan",
-        algorithms: ["HS256"],
-        typ: "charoo-profile-scan",
-      },
-    ));
-  } catch {
-    throw new HttpError(403, "Scan expired");
-  }
-  requireThat(
-    payload.pictureId === id &&
-      payload.attempt === attempt &&
-      payload.operation === operation,
-    403,
-    "Scan unavailable",
-  );
-  const p = unwrap(
-    await coordinator(c.env).pictureScanAccess(id, attempt, operation),
-  );
-  if (operation === "read") {
-    const object = await c.env.MEDIA.get(p.key);
-    requireThat(object, 404, "Picture unavailable");
-    unwrap(await coordinator(c.env).pictureScanAccess(id, attempt, operation));
-    return new Response(object.body, {
-      headers: {
-        "Content-Type": p.mime,
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-      },
-    });
-  }
-  requireThat(
-    c.req.header("Content-Type")?.split(";")[0] === p.mime,
-    400,
-    "Invalid media type",
-  );
-  const bytes = await boundedBody(c.req.raw, p.size);
-  requireThat(bytes.length > 0, 400, "Empty media");
-  await c.env.MEDIA.put(p.key, bytes, {
-    httpMetadata: { contentType: p.mime },
-    // Freeze the first sanitized output for this attempt. Scanner retries must
-    // not overwrite bytes that completion may already have validated.
-    onlyIf: { etagDoesNotMatch: "*" },
+// Legacy profile scan URLs no longer grant access to uploaded picture bytes.
+export async function pictureScanRequest(_c: HttpContext) {
+  return new Response("Profile scan links are no longer available", {
+    status: 410,
   });
-  const valid = await coordinator(c.env).pictureScanAccess(
-    id,
-    attempt,
-    operation,
-  );
-  if (!valid.ok) {
-    const published = await coordinator(c.env).pictureScanAccess(
-      id,
-      attempt,
-      "published",
-    );
-    if (!published.ok || published.value.key !== p.key)
-      await c.env.MEDIA.delete(p.key);
-    unwrap(valid);
-  }
-  return c.body(null, 204);
 }
 export function pictureRoutes(app: Hono<HttpEnv>) {
   app.get("/api/profile/picture", async (c) =>
@@ -139,6 +45,7 @@ export function pictureRoutes(app: Hono<HttpEnv>) {
     );
     const bytes = await boundedBody(c.req.raw, p.size);
     requireThat(bytes.length === p.size, 400, "Upload size changed");
+    validatePicture(bytes, p.mime);
     await c.env.MEDIA.put(p.object_key, bytes, {
       httpMetadata: { contentType: p.mime },
     });
@@ -155,66 +62,22 @@ export function pictureRoutes(app: Hono<HttpEnv>) {
   });
   app.post("/api/profile/picture/:id/complete", async (c) => {
     const id = uuid(c.req.param("id")),
-      p = await command(c, "picture.scan.begin", { id });
+      p = await command(c, "picture.complete.prepare", { id });
     if (p.state === "APPROVED") return c.json({ id: p.id, state: p.state });
-    let approved = false,
-      size = p.size;
-    try {
-      requireThat(
-        c.env.MEDIA_SCANNER_URL && c.env.MEDIA_SCANNER_TOKEN,
-        503,
-        "Media scanning is not configured",
-      );
-      const readUrl = await scanUrl(c, p, "read"),
-        writeUrl = await scanUrl(c, p, "write");
-      const res = await fetch(c.env.MEDIA_SCANNER_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${c.env.MEDIA_SCANNER_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          url: readUrl,
-          writeUrl,
-          mime: p.mime,
-          size: p.size,
-          stripMetadata: true,
-        }),
-        signal: AbortSignal.timeout(30000),
-        redirect: "manual",
-      });
-      requireThat(res.ok, 503, "Scanning temporarily unavailable");
-      const v = z
-        .object({
-          clean: z.boolean(),
-          magicBytesValid: z.boolean(),
-          metadataStripped: z.boolean(),
-          contentSafe: z.boolean(),
-        })
-        .parse(await res.json());
-      const output = await c.env.MEDIA.head(p.approved_key);
-      approved =
-        v.clean &&
-        v.magicBytesValid &&
-        v.metadataStripped &&
-        v.contentSafe &&
-        !!output &&
-        output.size > 0 &&
-        output.size <= p.size &&
-        output.httpMetadata?.contentType === p.mime;
-      size = output?.size || size;
-    } catch {
-      await coordinator(c.env)
-        .command(actor(c), "picture.scan.abort", { id, attempt: p.scanAttempt })
-        .catch(() => {});
-      throw new HttpError(503, "Scanning temporarily unavailable");
-    }
+    const object = await c.env.MEDIA.get(p.object_key);
+    requireThat(
+      object,
+      404,
+      "Uploaded picture unavailable. Please upload it again.",
+    );
+    const bytes = await boundedBody(object, p.size);
+    requireThat(bytes.length === p.size, 400, "Upload size changed");
+    validatePicture(bytes, p.mime);
     return c.json(
-      await command(c, "picture.scan.finish", {
+      await command(c, "picture.complete", {
         id,
-        attempt: p.scanAttempt,
-        approved,
-        size,
+        attempt: p.uploadAttempt,
+        key: p.object_key,
       }),
     );
   });

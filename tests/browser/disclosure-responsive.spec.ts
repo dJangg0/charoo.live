@@ -181,15 +181,28 @@ for (const viewport of sizes) {
     );
     await page.goto("/");
     await navigate(page, "Your profile");
-    const panel = page.getByLabel("Your profile picture", { exact: true });
+    const panel = page.locator(".profile-status");
     await expect(panel).toBeVisible();
     await noOverflow(page);
     const preview = page.getByAltText("Your private profile picture");
     await expect(preview).toHaveJSProperty("naturalHeight", 360);
     const bounds = await preview.boundingBox();
-    expect(bounds!.height / bounds!.width).toBeCloseTo(3, 0);
+    // The identity avatar intentionally crops the full image into its square.
+    expect(bounds!.height / bounds!.width).toBeCloseTo(1, 0);
+    const avatar = page.getByRole("button", {
+      name: "Change profile picture",
+      exact: true,
+    });
+    const avatarBounds = (await avatar.boundingBox())!;
+    expect(avatarBounds.height).toBeGreaterThanOrEqual(44);
+    expect(avatarBounds.width).toBeGreaterThanOrEqual(44);
+    await expect(
+      page
+        .locator(".profile-status")
+        .getByLabel("Your profile picture", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".profile-picture-settings")).toHaveCount(0);
     const picker = page.getByLabel("Replace profile picture");
-    expect((await picker.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await picker.setInputFiles({
       name: `${"long-picture-name".repeat(8)}.png`,
       mimeType: "image/png",

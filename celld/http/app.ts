@@ -56,7 +56,7 @@ app.use("*", async (c, next) => {
   const noAuthAdmin =
     localAdminEnabled(c.env) && c.req.path.startsWith("/api/admin/");
   requireThat(
-    !origin || trustedOrigin(c.env, origin) || noAuthAdmin,
+    !origin || trustedOrigin(c.env, origin, c.req.url) || noAuthAdmin,
     403,
     "Untrusted origin",
   );
@@ -72,7 +72,7 @@ app.use("*", async (c, next) => {
   }
   requireThat(
     ["GET", "HEAD"].includes(c.req.method) ||
-      trustedOrigin(c.env, origin) ||
+      trustedOrigin(c.env, origin, c.req.url) ||
       noAuthAdmin,
     403,
     "Origin required",

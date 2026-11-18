@@ -151,6 +151,12 @@ export interface Message {
   createdAt: string;
   clientMessageId: string;
   replyTo: string | null;
+  replyPreview?: {
+    id: string;
+    senderId: string;
+    name: string;
+    text: string;
+  } | null;
   attachmentId: string | null;
   reactions: Record<string, string[]>;
   readBy?: string[];

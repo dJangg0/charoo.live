@@ -1,13 +1,21 @@
 # Charoo shared engineering handoff
 
+## Current staging integration
+
+- **2026-11-18**, workspace `douala`, branch `dJangg0/staging-main-misalignment-merge`, target `origin/staging`. Local integration combines `origin/main` `5e62d8b` (containing PRs #1 and #2) with staging `68f1157` (PR #3).
+- Preserved staging reconnect behavior and branch-gated Cloudflare publishing; integrated main's profile avatar/bio, direct private profile upload, disclosure UX and Cloudflare Preview changes. Profile photos use bounded authenticated format/size checks without an external scanner; room attachments remain scanner-gated. Migration 0005 remains required before deployment.
+- Merge conflicts were resolved across SRS/engineering docs, package scripts, profile UI and styles. The profile UI keeps main's identity-card avatar and authoritative completion response plus staging's upload progress and preview retry/error feedback.
+- `git diff --cached --check` passed after conflict resolution. Tests and typecheck were not run for this integration; prior evidence remains tied to the commits recorded in the matrix. No remote push, PR, migration, resource mutation or deployment has been performed.
+- Immediate next step: commit the local merge and review the resulting status. Preserve this branch for a reviewable PR targeting `staging`.
+
 Root [SRS.md](../../SRS.md) remains canonical. Recheck repository and external state before continuing.
 
 | Field | Current state |
 |---|---|
-| Updated | 2026-11-18 — reconnect review follow-up |
-| Repository / workspace | Charoo / `nicosia` |
-| Branch / target | `dJangg0/cloudflare-deployment-fix` / `origin/staging` |
-| HEAD at verification | `3965123` with local reconnect review edits |
+| Updated | 2026-11-18 — staging/main integration |
+| Repository / workspace | Charoo / `douala` |
+| Branch / target | `dJangg0/staging-main-misalignment-merge` / `origin/staging` |
+| HEAD at verification | Merge commit to be recorded after local commit |
 
 ## Reconnect review follow-up
 

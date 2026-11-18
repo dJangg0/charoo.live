@@ -5,8 +5,8 @@
 - **2026-11-18**, workspace `douala`, branch `dJangg0/staging-main-misalignment-merge`, target `origin/staging`. Local integration combines `origin/main` `5e62d8b` (containing PRs #1 and #2) with staging `68f1157` (PR #3).
 - Preserved staging reconnect behavior and branch-gated Cloudflare publishing; integrated main's profile avatar/bio, direct private profile upload, disclosure UX and Cloudflare Preview changes. Profile photos use bounded authenticated format/size checks without an external scanner; room attachments remain scanner-gated. Migration 0005 remains required before deployment.
 - Merge conflicts were resolved across SRS/engineering docs, package scripts, profile UI and styles. The profile UI keeps main's identity-card avatar and authoritative completion response plus staging's upload progress and preview retry/error feedback.
-- PR [#4](https://github.com/dJangg0/charoo.live/pull/4) is open and mergeable. CI runs `44272232822` and `44276309509` passed `pnpm check` and `pnpm build`, then exposed old photo URL/feedback expectations and responsive selectors for the removed panel; those were updated. Run `44276893258` passed those cases but found one assertion expecting the upload-transfer status while backend completion was pending. Updated it to expect “Confirming your picture…”; push and wait for the next full rerun before merging.
-- No remote migration or deployment was performed. Preserve this branch and PR as the reviewable staging path.
+- PR [#4](https://github.com/dJangg0/charoo.live/pull/4) is open and mergeable. Latest CI run `44277756939` passed `pnpm check`, `pnpm build`, `pnpm test:native` and the native deployment dry run. It also verified the corrections for stale photo URL/feedback assertions, responsive selectors and the “Confirming your picture…” completion state. No Cloudflare deployment or remote migration was performed.
+- Immediate next step: merge PR #4 to `staging`, then verify the remote `staging` head and update this handoff with the merge SHA.
 
 Root [SRS.md](../../SRS.md) remains canonical. Recheck repository and external state before continuing.
 

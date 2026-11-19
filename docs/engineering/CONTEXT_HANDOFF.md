@@ -1,5 +1,11 @@
 # Charoo shared engineering handoff
 
+## Active chat refresh, 2026-11-19
+
+- In `tbilisi` on `dJangg0/image-spamming-concurrency` at staging base `b1fc9ce`, fixed IMP-08 and the overlapping refreshes reported with it. The active room socket drives fallback. Message updates share one refresh at a time, and duplicate send/socket notifications and already recorded read receipts skip extra work.
+- `pnpm check` passed 120 tests. `pnpm test:native` passed nine Celld scenarios and all 58 browser tests against both the built app and Vite. The Cloudflare frontend build passed. The reported production 429s could not be attributed from the screenshot. [Implementation evidence](IMPLEMENTATION_MATRIX.md#verification-gates-and-evidence-log)
+- Task checkpoint is `.context/handoffs/chat-refresh-root.md`. The local changes are ready for branch review. Cloudflare runtime verification is pending.
+
 ## Current staging integration
 
 - **2026-11-18**, workspace `douala`, branch `dJangg0/staging-main-misalignment-merge`, target `origin/staging`. Local integration combines `origin/main` `5e62d8b` (containing PRs #1 and #2) with staging `68f1157` (PR #3).

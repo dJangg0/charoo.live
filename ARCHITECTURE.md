@@ -42,6 +42,8 @@ Web Crypto retains AES-256-GCM and the original `iv.tag.body` encoding with room
 
 Separate authenticated notification, room and discovery sockets persist connection metadata for hibernation. Browser transport keeps one active room subscription, reconnects with backoff and reloads history. Socket input accepts only typing/ping; message creation remains REST with `clientMessageId` deduplication. Close code 4001 represents permission revocation, using Celld 0.6.1's permitted application close-code range. Notifications contain invalidations rather than plaintext history.
 
+The active room socket controls the chat's connection indicator and fallback polling. Presence heartbeats renew presence and matching leases independently. One refresh for the active view combines socket invalidations, successful sends and disconnected polling. An invalidation for newer data can queue a follow-up, and poll ticks skip requests already running. Read receipts are sent for new incoming messages that still need acknowledgement. Transient request failures retain the view and delay retries. Navigation cancels pending work for the previous view.
+
 Provider configuration, scanner capabilities, local commands, native D1 migration and deployment procedures are documented in [README.md](./README.md). Backend tests model interruptions with SQLite; the native suite separately exercises actual Celld storage, queues, provider adapters and a process restart. Live provider credentials and multi-node fleet failover are deployment checks outside local provisioning.
 
 ---

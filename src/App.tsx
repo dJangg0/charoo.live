@@ -2682,7 +2682,9 @@ export function App() {
           </section>
         )}
         {active && (
-          <section className="chat">
+          <section
+            className={active.type === "STRANGER" ? "chat quick-chat" : "chat"}
+          >
             <div className="chat-head">
               <button
                 className="button secondary small chat-back-button"

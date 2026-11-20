@@ -1,4 +1,5 @@
 import { Eye } from "lucide-react";
+import { QUICK_CHAT_DISCLOSURE_WORDS } from "@charoo/contracts";
 
 export interface PictureSharing {
   eligible: boolean;
@@ -27,15 +28,15 @@ export function QuickChatProgress({
   ];
 
   return (
-    <section className="quick-chat-progress" aria-label="ASL reveal progress">
+    <section className="quick-chat-progress" aria-label="Quick chat progress">
       <div className="quick-chat-progress-heading">
-        <strong>ASL unlock</strong>
-        <span>5 qualifying messages each</span>
+        <strong>Chat progress</strong>
+        <span>{QUICK_CHAT_DISCLOSURE_WORDS} words each to unlock sharing</span>
       </div>
       <div className="quick-chat-progress-people">
         {people.map((person) => {
           const count = Math.min(
-            5,
+            QUICK_CHAT_DISCLOSURE_WORDS,
             Math.max(
               0,
               progress.find((item) => item.id === person.id)?.count || 0,
@@ -45,18 +46,24 @@ export function QuickChatProgress({
             <div className="quick-chat-progress-person" key={person.id}>
               <div className="quick-chat-progress-label">
                 <span>{person.label}</span>
-                <span>{count}/5</span>
+                <span>
+                  {count}/{QUICK_CHAT_DISCLOSURE_WORDS}
+                </span>
               </div>
               <div
                 className="quick-chat-progress-track"
                 role="progressbar"
                 aria-label={person.label}
                 aria-valuemin={0}
-                aria-valuemax={5}
+                aria-valuemax={QUICK_CHAT_DISCLOSURE_WORDS}
                 aria-valuenow={count}
-                aria-valuetext={`${count} of 5 qualifying messages`}
+                aria-valuetext={`${count} of ${QUICK_CHAT_DISCLOSURE_WORDS} words`}
               >
-                <span style={{ width: `${(count / 5) * 100}%` }} />
+                <span
+                  style={{
+                    width: `${(count / QUICK_CHAT_DISCLOSURE_WORDS) * 100}%`,
+                  }}
+                />
               </div>
             </div>
           );

@@ -1,5 +1,6 @@
 import { z } from "zod";
 export const QUICK_CHAT_SEARCH_TIMEOUT_MS = 2 * 60 * 1000;
+export const QUICK_CHAT_DISCLOSURE_WORDS = 10;
 export const roomTypes = [
   "AVAILABLE_TONIGHT",
   "SHARED_GROUP",

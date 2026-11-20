@@ -1,11 +1,6 @@
 import { expect, it } from "vitest";
 import { createCipheriv } from "node:crypto";
-import {
-  encrypt,
-  decrypt,
-  fingerprint,
-  meaningful,
-} from "../celld/shared/crypto";
+import { encrypt, decrypt, fingerprint } from "../celld/shared/crypto";
 const key = btoa("x".repeat(32));
 it("retains AES-256-GCM iv.tag.body compatibility with the Node backend", async () => {
   const iv = new Uint8Array(12),
@@ -38,13 +33,11 @@ it("rejects modified ciphertext, tags, room authenticated data and wrong keys", 
   await expect(decrypt(parts.join("."), key, "room-a")).rejects.toThrow();
   await expect(decrypt("bad", key, "room-a")).rejects.toThrow();
 });
-it("normalizes qualifying-message fingerprints and keeps rooms separate", async () => {
+it("normalizes message fingerprints and keeps rooms separate", async () => {
   expect(await fingerprint(" Hello   FRIEND ", key, "a")).toBe(
     await fingerprint("hello friend", key, "a"),
   );
   expect(await fingerprint("hello friend", key, "a")).not.toBe(
     await fingerprint("hello friend", key, "b"),
   );
-  expect(meaningful("aaaaaaaaaaaaaaaa", null)).toBe(false);
-  expect(meaningful("hello friend", new Date().toISOString())).toBe(false);
 });

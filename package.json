@@ -13,7 +13,7 @@
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test",
     "deploy": "pnpm build && tsx celld/scripts/deploy.ts",
-    "deploy:cloudflare": "pnpm build:cloudflare && wrangler deploy --config wrangler.cloudflare.jsonc",
+    "deploy:cloudflare": "tsx celld/scripts/cloudflare-deploy-guard.ts production && pnpm build:cloudflare && wrangler deploy --config wrangler.cloudflare.jsonc",
     "deploy:cloudflare:dry-run": "pnpm build:cloudflare && wrangler deploy --config wrangler.cloudflare.jsonc --dry-run",
     "preview:cloudflare": "wrangler preview --config wrangler.cloudflare.jsonc",
     "deploy:cloudflare:staging": "tsx celld/scripts/cloudflare-deploy-guard.ts staging && pnpm build:cloudflare:staging && wrangler deploy --config wrangler.staging.jsonc",

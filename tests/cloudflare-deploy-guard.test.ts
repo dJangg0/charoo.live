@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
 import { assertCloudflareDeployBranch } from "../celld/scripts/cloudflare-deploy-branch";
 
 describe("Cloudflare deployment branch guard", () => {
+  it("checks the target branch before either publish script builds or deploys", () => {
+    const { scripts } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    const guard = "tsx celld/scripts/cloudflare-deploy-guard.ts";
+
+    expect(scripts["deploy:cloudflare"].split(" && ")[0]).toBe(
+      `${guard} production`,
+    );
+    expect(scripts["deploy:cloudflare:staging"].split(" && ")[0]).toBe(
+      `${guard} staging`,
+    );
+  });
+
   it("allows production deployment from main", () => {
     expect(() =>
       assertCloudflareDeployBranch("production", "main"),

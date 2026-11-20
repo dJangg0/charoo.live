@@ -29,12 +29,12 @@ async function quickChat() {
 }
 type Chat = Awaited<ReturnType<typeof quickChat>>;
 
+let wordSequence = 0;
 async function send(chat: Chat, owner: Guest, count: number) {
   for (let i = 0; i < count; i++) {
-    vi.setSystemTime(Date.now() + 3001);
     unwrap(
       await chat.room.command(owner.actor, "message", {
-        text: `A different thought about our conversation ${crypto.randomUUID()}`,
+        text: `word${++wordSequence}`,
         clientMessageId: crypto.randomUUID(),
       }),
     );
@@ -147,8 +147,7 @@ describe("FR-12 quick-chat disclosure", () => {
       const chat = await quickChat();
       await setProfile(chat.f, chat.a.actor, "public");
       await setProfile(chat.f, chat.b.actor, "public");
-      await send(chat, chat.a, 5);
-      await send(chat, chat.b, 5);
+      await makeEligible(chat);
       expect(
         (await snapshot(chat, chat.b)).participants.find(
           (p: any) => p.id === chat.a.actor.userId,
@@ -183,10 +182,10 @@ describe("FR-12 quick-chat disclosure", () => {
 
   it.each([
     [10, 0],
-    [10, 4],
-    [4, 5],
+    [10, 9],
+    [9, 10],
   ])(
-    "keeps ASL and picture invitations hidden with %i/%i messages",
+    "keeps ASL and picture invitations hidden with %i/%i words",
     async (a, b) => {
       const chat = await quickChat();
       await setProfile(chat.f, chat.a.actor, "public");
@@ -203,7 +202,7 @@ describe("FR-12 quick-chat disclosure", () => {
     },
   );
 
-  it("reveals permitted ASL at five each without room-age or legacy setting gates", async () => {
+  it("unlocks permitted ASL and the photo invitation at ten words each without legacy gates", async () => {
     const chat = await quickChat();
     await setProfile(chat.f, chat.a.actor, "public");
     await setProfile(chat.f, chat.b.actor, "private");
@@ -219,8 +218,8 @@ describe("FR-12 quick-chat disclosure", () => {
       .prepare("UPDATE settings SET value=?")
       .bind(JSON.stringify(settings))
       .run();
-    await send(chat, chat.a, 5);
-    await send(chat, chat.b, 4);
+    await send(chat, chat.a, 10);
+    await send(chat, chat.b, 9);
     expect((await snapshot(chat)).asl_revealed).toBe(false);
     await send(chat, chat.b, 1);
     const a = await snapshot(chat),
@@ -236,11 +235,11 @@ describe("FR-12 quick-chat disclosure", () => {
       gender: "Woman",
       region: "Manila",
     });
-    expect(a.pictureSharing.eligible).toBe(false);
+    expect(a.pictureSharing.eligible).toBe(true);
     expect(a.pictureSharing.participants).toEqual([]);
   });
 
-  it("normalizes an old early ASL reveal against the five-each requirement", async () => {
+  it("normalizes an old early ASL reveal and restores legacy progress from saved messages", async () => {
     const chat = await quickChat();
     await setProfile(chat.f, chat.a.actor, "public");
     await setProfile(chat.f, chat.b.actor, "public");
@@ -253,6 +252,10 @@ describe("FR-12 quick-chat disclosure", () => {
     );
     // Older deployments could reveal after one each under lowered admin settings.
     meta.asl_revealed = true;
+    state.database.exec(
+      "UPDATE charoo_participants SET data=json_remove(data,'$.word_count'); DELETE FROM charoo_fingerprints",
+    );
+    chat.room = chat.f.rooms.restart(`charoo:${chat.roomId}`);
     state.database
       .prepare("UPDATE charoo_meta SET data=?")
       .run(JSON.stringify(meta));
@@ -260,20 +263,21 @@ describe("FR-12 quick-chat disclosure", () => {
       const current = await snapshot(chat, viewer);
       expect(current.asl_revealed).toBe(false);
       expect(current.participants.every((p: any) => p.asl === null)).toBe(true);
+      expect(current.aslProgress.map((p: any) => p.count)).toEqual([1, 1]);
     }
-    await send(chat, chat.a, 4);
-    await send(chat, chat.b, 4);
+    await send(chat, chat.a, 9);
+    await send(chat, chat.b, 9);
     const current = await snapshot(chat);
     expect(current.asl_revealed).toBe(true);
     expect(current.participants.every((p: any) => p.asl !== null)).toBe(true);
   });
 
-  it("requires ten each for pictures even when one participant has sent twenty", async () => {
+  it("rejects photo approval when one participant has twenty words and the other has nine", async () => {
     const chat = await quickChat();
     await send(chat, chat.a, 20);
     await send(chat, chat.b, 9);
     const state = await snapshot(chat);
-    expect(state.asl_revealed).toBe(true);
+    expect(state.asl_revealed).toBe(false);
     expect(state.pictureSharing.eligible).toBe(false);
     expect(
       await chat.room.command(chat.a.actor, "picture.share", {
@@ -283,59 +287,35 @@ describe("FR-12 quick-chat disclosure", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("does not count stable-ID retries, repeated content, short messages, rapid sends or failed writes", async () => {
+  it("counts short and rapid text while ignoring repeated copies, retries and failed writes", async () => {
     const chat = await quickChat();
-    const text = "How has your day been so far?",
-      clientMessageId = crypto.randomUUID();
-    unwrap(
-      await chat.room.command(chat.a.actor, "message", {
-        text,
-        clientMessageId,
-      }),
-    );
-    const first = await snapshot(chat);
-    const progress = (state: any) =>
-      state.aslProgress.find((p: any) => p.id === chat.a.actor.userId).count;
-    expect(progress(first)).toBe(1);
-    vi.setSystemTime(Date.now() + 3001);
-    unwrap(
-      await chat.room.command(chat.a.actor, "message", {
-        text,
-        clientMessageId,
-      }),
-    );
-    unwrap(
-      await chat.room.command(chat.a.actor, "message", {
-        text: " HOW has your DAY been so far? ",
-        clientMessageId: crypto.randomUUID(),
-      }),
-    );
-    unwrap(
-      await chat.room.command(chat.a.actor, "message", {
-        text: "hi",
-        clientMessageId: crypto.randomUUID(),
-      }),
-    );
-    unwrap(
-      await chat.room.command(chat.a.actor, "message", {
-        text: "Here is a second distinct and meaningful sentence",
-        clientMessageId: crypto.randomUUID(),
-      }),
-    );
-    unwrap(
-      await chat.room.command(chat.a.actor, "message", {
-        text: "This immediate next sentence should not qualify",
-        clientMessageId: crypto.randomUUID(),
-      }),
-    );
+    const clientMessageId = crypto.randomUUID();
+    const post = (text: string, id = crypto.randomUUID()) =>
+      chat.room.command(chat.a.actor, "message", { text, clientMessageId: id });
+    const progress = async () =>
+      (await snapshot(chat)).aslProgress.find(
+        (p: any) => p.id === chat.a.actor.userId,
+      ).count;
+
+    unwrap(await post("Hi", clientMessageId));
+    expect(await progress()).toBe(1);
+    unwrap(await post("Hi", clientMessageId));
+    unwrap(await post(" HI "));
+    unwrap(await post("🙌 !!! 123"));
+    expect(await progress()).toBe(1);
+    await Promise.all([
+      post("How's your día?").then(unwrap),
+      post("Good morning").then(unwrap),
+    ]);
+    expect(await progress()).toBe(6);
     expect(
       await chat.room.command(chat.a.actor, "message", {
-        text: "This rejected reply cannot count toward a milestone",
+        text: "This rejected reply cannot count",
         clientMessageId: crypto.randomUUID(),
         replyTo: crypto.randomUUID(),
       }),
     ).toMatchObject({ ok: false });
-    expect(progress(await snapshot(chat))).toBe(2);
+    expect(await progress()).toBe(6);
     expect((await snapshot(chat)).asl_revealed).toBe(false);
   });
 

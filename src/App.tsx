@@ -58,7 +58,7 @@ import {
   type Settings as AppSettings,
   type Profile,
 } from "@charoo/contracts";
-import { api, setCsrf, getCsrf, randomUUID } from "./api";
+import { api, ApiError, setCsrf, getCsrf, randomUUID } from "./api";
 const VideoCall = lazy(() =>
   import("./Call").then((m) => ({ default: m.VideoCall })),
 );
@@ -69,6 +69,25 @@ type Page =
   | "contacts"
   | "profile"
   | "admin";
+type MessagePage = { messages: Message[]; next: string | null };
+type RefreshScope = "room" | "messages" | "all";
+type ChatView = {
+  id: string;
+  controller: AbortController;
+  inFlight: Promise<void> | null;
+  queued: RefreshScope | null;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  failures: number;
+  messageEvents: Set<string>;
+  lastReadId?: string;
+};
+const CHAT_POLL_MS = 5000;
+const mergeRefresh = (queued: RefreshScope | null, scope: RefreshScope) =>
+  queued && queued !== scope ? "all" : scope;
+const roomUnavailable = (error: unknown) =>
+  error instanceof ApiError && [401, 403, 404, 410].includes(error.status);
+const sameSnapshot = (previous: unknown, next: unknown) =>
+  JSON.stringify(previous) === JSON.stringify(next);
 function Modal({
   title,
   children,
@@ -251,6 +270,7 @@ export function App() {
     [shareUrl, setShareUrl] = useState(""),
     [inviteCopyMessage, setInviteCopyMessage] = useState(""),
     [connected, setConnected] = useState(false),
+    [roomConnected, setRoomConnected] = useState(false),
     [mobileNav, setMobileNav] = useState(false),
     [createAfterGuest, setCreateAfterGuest] = useState(false),
     [pending, setPending] = useState<any[]>([]),
@@ -293,6 +313,16 @@ export function App() {
     [rejectReasons, setRejectReasons] = useState<Record<string, string>>({});
   const ws = useRef<Realtime | null>(null),
     activeRef = useRef<any>(null),
+    chatView = useRef<ChatView | null>(null),
+    roomOpening = useRef<{
+      id: string;
+      controller: AbortController;
+      promise: Promise<void>;
+    } | null>(null),
+    presenceRequest = useRef<{
+      key: string;
+      promise: Promise<void>;
+    } | null>(null),
     userRef = useRef<User | null>(null),
     queueStartedAt = useRef<number | null>(null),
     statusRef = useRef(status),
@@ -303,7 +333,6 @@ export function App() {
     chatEnd = useRef<HTMLDivElement>(null),
     shareLinkInput = useRef<HTMLInputElement>(null),
     typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  activeRef.current = active;
   userRef.current = user;
   statusRef.current = status;
   const notify = (text: string, isError = false) => {
@@ -369,73 +398,247 @@ export function App() {
     setBlocks(bs);
     setCalls(vs);
   }
+  function cancelRoomOpen() {
+    roomOpening.current?.controller.abort();
+    roomOpening.current = null;
+  }
+  function cancelChatRefresh() {
+    const view = chatView.current;
+    if (!view) return;
+    chatView.current = null;
+    clearTimeout(view.retryTimer);
+    view.controller.abort();
+  }
+  function closeActiveRoom() {
+    const id = activeRef.current?.id;
+    cancelChatRefresh();
+    if (id)
+      ws.current?.send(JSON.stringify({ type: "unsubscribe", roomId: id }));
+    activeRef.current = null;
+    setActive(null);
+    setRoomConnected(false);
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+  }
+  function applyRoomSnapshot(snapshot: any) {
+    const current = activeRef.current;
+    if (
+      current?.id === snapshot.id &&
+      (snapshot.version < current.version || sameSnapshot(current, snapshot))
+    )
+      return;
+    activeRef.current = snapshot;
+    setActive(snapshot);
+  }
   async function openRoom(id: string) {
     setMobileNav(false);
-    const room = await api(`/rooms/${id}`),
-      result = await api(`/rooms/${id}/messages`);
-    reconcilePending(id, result.messages);
-    setActive(room);
-    activeRef.current = room;
-    setMessages(result.messages);
-    setMessageNext(result.next);
-    queueStartedAt.current = null;
-    setQueue(false);
-    setDraft("");
-    setReply(null);
-    setTyping(false);
-    if (ws.current?.readyState === 1)
-      ws.current.send(JSON.stringify({ type: "subscribe", roomId: id }));
-    await api(`/rooms/${id}/read`, "POST", {});
+    if (roomOpening.current?.id === id) return roomOpening.current.promise;
+    cancelRoomOpen();
+    if (chatView.current?.id === id) return;
+
+    const controller = new AbortController();
+    const promise = (async () => {
+      const room = await api(
+        `/rooms/${id}`,
+        "GET",
+        undefined,
+        controller.signal,
+      );
+      const data = await api<MessagePage>(
+        `/rooms/${id}/messages`,
+        "GET",
+        undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+
+      closeActiveRoom();
+      const view: ChatView = {
+        id: room.id,
+        controller: new AbortController(),
+        inFlight: null,
+        queued: null,
+        failures: 0,
+        messageEvents: new Set(),
+      };
+      chatView.current = view;
+      applyRoomSnapshot(room);
+      reconcilePending(id, data.messages);
+      setMessages(data.messages);
+      setMessageNext(data.next);
+      queueStartedAt.current = null;
+      setQueue(false);
+      setDraft("");
+      setReply(null);
+      setTyping(false);
+      ws.current?.send(JSON.stringify({ type: "subscribe", roomId: view.id }));
+      await runChatRefresh(view, data);
+    })()
+      .catch((error) => {
+        if (!controller.signal.aborted) throw error;
+      })
+      .finally(() => {
+        if (roomOpening.current?.controller === controller)
+          roomOpening.current = null;
+      });
+    roomOpening.current = { id, controller, promise };
+    return promise;
   }
   function reconcilePending(roomId: string, messages: Message[]) {
     const confirmedIds = new Set(
       messages.map((message) => message.clientMessageId),
     );
-    setPending((items) =>
-      items.filter(
+    setPending((items) => {
+      const remaining = items.filter(
         (item) =>
           item.roomId !== roomId || !confirmedIds.has(item.clientMessageId),
-      ),
-    );
+      );
+      return remaining.length === items.length ? items : remaining;
+    });
   }
-  async function refreshChat(roomId?: string) {
-    const room = roomId ? { id: roomId } : activeRef.current;
-    if (!room) return;
-    try {
-      const [data, meta] = await Promise.all([
-        api(`/rooms/${room.id}/messages`),
-        api(`/rooms/${room.id}`),
-      ]);
-      reconcilePending(room.id, data.messages);
-      if (activeRef.current?.id !== room.id) return;
-      setMessages(data.messages);
-      setMessageNext(data.next);
-      setActive(meta);
-      await api(`/rooms/${room.id}/read`, "POST", {});
-    } catch (e) {
-      if (activeRef.current?.id !== room.id) return;
-      const message = (e as Error).message;
-      setActive(null);
-      activeRef.current = null;
-      if (/removed from this room/i.test(message)) {
-        setKicked({
-          title: room.title || "This room",
-          reason:
-            message.replace(/^.*?removed from this room:?\s*/i, "") || message,
-        });
-      } else {
-        notify(message, true);
-      }
+  async function refreshChat(
+    roomId = activeRef.current?.id,
+    scope: RefreshScope = "all",
+    messageId?: string,
+  ) {
+    const view = chatView.current;
+    if (!view || view.id !== roomId) return;
+    if (messageId) {
+      if (view.messageEvents.has(messageId)) return view.inFlight;
+      view.messageEvents.add(messageId);
+      if (view.messageEvents.size > 100)
+        view.messageEvents.delete(view.messageEvents.values().next().value!);
     }
+    view.queued = mergeRefresh(view.queued, scope);
+    if (view.inFlight) {
+      // A new invalidation may have committed after the current reads began.
+      await view.inFlight;
+      return view.inFlight;
+    }
+    return runChatRefresh(view);
+  }
+  function runChatRefresh(view: ChatView, initial?: MessagePage) {
+    if (chatView.current !== view || view.retryTimer !== undefined) return;
+    const scope = view.queued;
+    if (!scope && !initial) return;
+    view.queued = null;
+    const { id, controller } = view;
+    const path = `/rooms/${id}`;
+    const promise = (async () => {
+      let data = initial;
+      let retryScope = scope ?? "messages";
+      try {
+        if (scope) {
+          // Wait for both requests to settle before allowing another refresh.
+          const [messagesResult, roomResult] = await Promise.allSettled([
+            scope !== "room"
+              ? api<MessagePage>(
+                  `${path}/messages`,
+                  "GET",
+                  undefined,
+                  controller.signal,
+                )
+              : undefined,
+            scope !== "messages"
+              ? api(path, "GET", undefined, controller.signal)
+              : undefined,
+          ]);
+          if (chatView.current !== view) return;
+          const errors = [messagesResult, roomResult]
+            .filter((result) => result.status === "rejected")
+            .map((result) => result.reason);
+          const denial = errors.find(roomUnavailable);
+          if (denial) {
+            const title = activeRef.current?.title || "This room";
+            closeActiveRoom();
+            if (/removed from this room/i.test(denial.message)) {
+              setKicked({
+                title,
+                reason:
+                  denial.message.replace(/^.*?removed from this room:?\s*/i, "") ||
+                  denial.message,
+              });
+            } else notify(denial.message, true);
+            return;
+          }
+          if (errors.length) {
+            const withCooldown = errors.find(
+              (error) => error instanceof ApiError && error.retryAfterMs > 0,
+            );
+            throw withCooldown ?? errors[0];
+          }
+          if (roomResult.status === "fulfilled" && roomResult.value)
+            applyRoomSnapshot(roomResult.value);
+          if (messagesResult.status === "fulfilled")
+            data = messagesResult.value;
+          if (data) {
+            const { messages: latest, next } = data;
+            reconcilePending(id, latest);
+            setMessages((current) =>
+              sameSnapshot(current, latest) ? current : latest,
+            );
+            setMessageNext(next);
+          }
+          retryScope = "messages";
+        }
+        if (data) await recordRoomRead(view, data.messages);
+        view.failures = 0;
+      } catch (error) {
+        if (chatView.current !== view) return;
+        const retryable =
+          error instanceof TypeError ||
+          (error instanceof ApiError &&
+            (error.status === 429 || error.status === 408 || error.status >= 500));
+        if (!retryable || !view.failures) notify((error as Error).message, true);
+        if (retryable) {
+          view.queued = mergeRefresh(view.queued, retryScope);
+          const retryAfter = error instanceof ApiError ? error.retryAfterMs : 0;
+          const backoff = Math.min(30_000, CHAT_POLL_MS * 2 ** view.failures++);
+          view.retryTimer = setTimeout(() => {
+            view.retryTimer = undefined;
+            void runChatRefresh(view);
+          }, Math.min(2 ** 31 - 1, Math.max(retryAfter, backoff)));
+        }
+      }
+    })().finally(() => {
+      view.inFlight = null;
+      void runChatRefresh(view);
+    });
+    view.inFlight = promise;
+    return promise;
+  }
+  async function recordRoomRead(view: ChatView, messages: Message[]) {
+    const userId = userRef.current?.id;
+    const newest = messages.findLast((message) => message.senderId !== userId);
+    if (
+      !userId || !newest || view.lastReadId === newest.id ||
+      newest.readBy?.includes(userId)
+    )
+      return;
+    await api(`/rooms/${view.id}/read`, "POST", {}, view.controller.signal);
+    view.lastReadId = newest.id;
   }
   async function heartbeat() {
-    if (!userRef.current) return;
-    const value = await api("/presence", "POST", {
+    const userId = userRef.current?.id;
+    if (!userId) return;
+    const input = {
       status: statusRef.current,
       roomId: activeRef.current?.id,
       heartbeat: true,
-    });
-    setStatus(value.status);
+    };
+    const key = JSON.stringify([userId, input]);
+    if (presenceRequest.current?.key === key)
+      return presenceRequest.current.promise;
+    const promise = api("/presence", "POST", input)
+      .then((value) => {
+        if (userRef.current?.id === userId && statusRef.current === input.status)
+          setStatus(value.status);
+      })
+      .finally(() => {
+        if (presenceRequest.current?.promise === promise)
+          presenceRequest.current = null;
+      });
+    presenceRequest.current = { key, promise };
+    return promise;
   }
   async function loadAdmin(searchUsers = userSearch) {
     setAdminLoading(true);
@@ -626,16 +829,23 @@ export function App() {
   }, [mobileNav]);
   useEffect(() => {
     if (!user || loading) return;
+    const beat = () => {
+      if (!presenceRequest.current) void heartbeat().catch(() => {});
+    };
+    beat();
+    const t = setInterval(beat, 25000);
+    return () => {
+      clearInterval(t);
+      presenceRequest.current = null;
+    };
+  }, [user?.id, loading]);
+  useEffect(() => {
+    if (!user || loading) return;
     background(async () => {
-      await heartbeat();
+      await presenceRequest.current?.promise.catch(() => {});
       await loadSocial();
       await joinShared();
     });
-    const t = setInterval(
-      () => heartbeat().catch(() => setConnected(false)),
-      25000,
-    );
-    return () => clearInterval(t);
   }, [user?.id, loading, joinProfilePending]);
   useEffect(() => {
     if (!user?.verified || page !== "tonight") return;
@@ -655,10 +865,18 @@ export function App() {
       );
   }, [page, active?.id, connected, user?.verified]);
   useEffect(() => {
-    if (!active || connected) return;
-    const t = setInterval(() => refreshChat().catch(() => {}), 5000);
+    const id = active?.id;
+    if (!id || roomConnected) return;
+    const t = setInterval(() => {
+      if (chatView.current?.id === id && !chatView.current?.inFlight)
+        void refreshChat(id);
+    }, CHAT_POLL_MS);
     return () => clearInterval(t);
-  }, [active?.id, connected]);
+  }, [active?.id, roomConnected]);
+  useEffect(() => () => {
+    cancelRoomOpen();
+    cancelChatRefresh();
+  }, []);
   useEffect(() => {
     if (!queue) return;
     const startedAt = (queueStartedAt.current ??= Date.now());
@@ -705,28 +923,24 @@ export function App() {
       const ack = acks.current.get(event.payload.clientMessageId);
       if (ack) ack.resolve();
     }
-    if (event.type === "read" && event.roomId === activeRef.current?.id)
-      api(`/rooms/${event.roomId}/messages`)
-        .then((r) => {
-          if (activeRef.current?.id === event.roomId) setMessages(r.messages);
-        })
-        .catch(() => {});
+    if (event.type === "read") {
+      const room = activeRef.current;
+      if (
+        room && room.id === event.roomId &&
+        event.payload?.userId !== userRef.current?.id &&
+        ["STRANGER", "PRIVATE", "CONTACT"].includes(room.type)
+      )
+        void refreshChat(room.id, "messages");
+      return;
+    }
     if (event.type === "matched")
       background(async () => {
         await openRoom(event.payload.roomId);
         await loadSocial();
       });
     if (event.type === "room.removed") {
-      if (ws.current?.readyState === 1 && event.roomId)
-        try {
-          ws.current.send(
-            JSON.stringify({ type: "unsubscribe", roomId: event.roomId }),
-          );
-        } catch {}
-      if (activeRef.current?.id === event.roomId) {
-        setActive(null);
-        activeRef.current = null;
-      }
+      if (roomOpening.current?.id === event.roomId) cancelRoomOpen();
+      if (activeRef.current?.id === event.roomId) closeActiveRoom();
       setKicked({
         title: event.payload?.title || "This room",
         reason: event.payload?.reason || "The host removed you from the room.",
@@ -775,12 +989,14 @@ export function App() {
       return;
     }
     if (
-      ["room.join_requested", "message", "room.changed"].includes(event.type) &&
-      (!event.roomId || event.roomId === activeRef.current?.id)
+      event.roomId && event.roomId === activeRef.current?.id &&
+      ["room.join_requested", "message", "room.changed", "picture.shared"].includes(event.type)
     ) {
-      if (event.type === "room.join_requested" && !activeRef.current)
-        background(loadSocial);
-      else background(refreshChat);
+      const messageId = event.type === "message" ? event.payload?.id : undefined;
+      const scope = event.type === "room.changed" || messageId
+        ? "all"
+        : event.type === "message" ? "messages" : "room";
+      void refreshChat(event.roomId, scope, messageId);
       if (event.type === "room.join_requested")
         notify(
           event.payload?.title
@@ -789,14 +1005,11 @@ export function App() {
         );
       return;
     }
-    if (event.type === "room.changed" && event.roomId === activeRef.current?.id)
-      background(refreshChat);
     if (
       event.type === "room.closed" &&
       event.roomId === activeRef.current?.id
     ) {
-      setActive(null);
-      activeRef.current = null;
+      closeActiveRoom();
       notify("This room has closed.");
       background(loadSocial);
     }
@@ -839,7 +1052,8 @@ export function App() {
     ) {
       background(async () => {
         await loadSocial();
-        if (activeRef.current) await refreshChat();
+        if (event.type === "blocked" || event.type === "unblocked")
+          await refreshChat();
       });
     }
     if (
@@ -851,45 +1065,43 @@ export function App() {
       typingTimer.current = setTimeout(() => setTyping(false), 2500);
     }
     if (event.type === "session.revoked") {
+      userRef.current = null;
       setUser(null);
-      setActive(null);
+      cancelRoomOpen();
+      closeActiveRoom();
       notify("Your session is no longer available.", true);
     }
   };
   useEffect(() => {
     if (!user) return;
-
-    function connect() {
-      const socket = new Realtime();
-      ws.current = socket;
-      socket.onopen = () => {
-        setConnected(true);
-        if (userRef.current?.verified)
-          socket.send(
-            JSON.stringify({ type: "discovery", payload: page === "tonight" }),
-          );
-        if (activeRef.current)
-          socket.send(
-            JSON.stringify({ type: "subscribe", roomId: activeRef.current.id }),
-          );
-        background(async () => {
-          await loadSocial();
-          if (activeRef.current) await refreshChat();
-        });
-      };
-      socket.onmessage = (e) => {
-        try {
-          actionRef.current(JSON.parse(e.data));
-        } catch {}
-      };
-      socket.onclose = () => {
-        setConnected(false);
-      };
-      socket.onerror = () => socket.close();
+    const socket = new Realtime();
+    ws.current = socket;
+    setConnected(false);
+    setRoomConnected(false);
+    socket.onopen = (recovered) => {
+      setConnected(true);
+      if (recovered) {
+        void background(loadSocial);
+        void refreshChat();
+      }
+    };
+    socket.onRoomConnectionChange = (id, online) => {
+      if (chatView.current?.id === id) setRoomConnected(online);
+    };
+    socket.onmessage = (e) => {
+      try {
+        actionRef.current(JSON.parse(e.data));
+      } catch {}
+    };
+    socket.onclose = () => setConnected(false);
+    if (chatView.current) {
+      const roomId = chatView.current.id;
+      socket.send(JSON.stringify({ type: "subscribe", roomId }));
+      void refreshChat(roomId);
     }
-    connect();
     return () => {
-      ws.current?.close();
+      ws.current = null;
+      socket.close();
     };
   }, [user?.id, getCsrf()]);
   useEffect(() => {
@@ -988,12 +1200,13 @@ export function App() {
   async function openInvite() {
     const room = activeRef.current;
     if (!room) return;
+    const view = chatView.current;
     await act(async () => {
       const url =
         room.shareUrl ||
         (await api(`/rooms/${room.id}/invite`, "POST", {})).shareUrl;
-      if (activeRef.current?.id !== room.id) return;
-      setActive((current: any) => ({ ...current, shareUrl: url }));
+      if (chatView.current !== view) return;
+      applyRoomSnapshot({ ...activeRef.current, shareUrl: url });
       setShareUrl(url);
       setInviteCopyMessage("");
       setModal("invite");
@@ -1035,7 +1248,7 @@ export function App() {
       status: _status,
       ...body
     } = payload;
-    await api(`/rooms/${roomId}/messages`, "POST", body);
+    const sent = await api<{ id: string }>(`/rooms/${roomId}/messages`, "POST", body);
     setPending((prev) =>
       prev.map((item) =>
         item.clientMessageId === payload.clientMessageId
@@ -1043,7 +1256,7 @@ export function App() {
           : item,
       ),
     );
-    background(() => refreshChat(roomId));
+    void refreshChat(roomId, "all", sent?.id);
   }
   async function retryPendingMessage(message: any) {
     try {
@@ -1126,10 +1339,8 @@ export function App() {
     decision: "approved" | "declined",
     pictureId?: string,
   ) {
-    if (
-      activeRef.current?.id !== roomId ||
-      activeRef.current.type !== "STRANGER"
-    )
+    const view = chatView.current;
+    if (view?.id !== roomId || activeRef.current.type !== "STRANGER")
       return;
     await act(async () => {
       try {
@@ -1137,17 +1348,9 @@ export function App() {
           decision,
           ...(decision === "approved" ? { pictureId } : {}),
         });
-        if (activeRef.current?.id !== roomId) return;
-        setActive(snapshot);
-        activeRef.current = snapshot;
+        if (chatView.current === view) applyRoomSnapshot(snapshot);
       } catch (error) {
-        if (activeRef.current?.id === roomId) {
-          const snapshot = await api(`/rooms/${roomId}`).catch(() => null);
-          if (snapshot && activeRef.current?.id === roomId) {
-            setActive(snapshot);
-            activeRef.current = snapshot;
-          }
-        }
+        if (chatView.current === view) await refreshChat(roomId, "room");
         throw error;
       }
     });
@@ -1173,12 +1376,8 @@ export function App() {
     nav.push(["admin", "Moderation", <Shield size={20} />]);
   const choosePage = (p: Page) => {
     setPage(p);
-    if (activeRef.current && ws.current?.readyState === 1)
-      ws.current.send(
-        JSON.stringify({ type: "unsubscribe", roomId: activeRef.current.id }),
-      );
-    setActive(null);
-    activeRef.current = null;
+    cancelRoomOpen();
+    closeActiveRoom();
     setMobileNav(false);
   };
   const startSharedRoom = () => {
@@ -1205,14 +1404,26 @@ export function App() {
     choosePage("groups");
     setModal(userRef.current ? "joinProfile" : "guest");
   };
-  const request = (targetId: string, kind: string) =>
+  const request = (targetId: string, kind: string, sourceRoomId?: string) =>
     act(async () => {
       await api("/requests", "POST", {
         targetId,
         kind,
-        roomId: activeRef.current?.id,
+        roomId: sourceRoomId || activeRef.current?.id,
       });
       notify("Request sent. They decide whether to accept.");
+      if (kind === "RECONNECT") background(loadSocial);
+    });
+  const respondSocialRequest = (id: string, accept: boolean) =>
+    act(async () => {
+      const result = await api(`/requests/${id}/respond`, "POST", { accept });
+      background(loadSocial);
+      if (result.roomId) {
+        await openRoom(result.roomId);
+        notify("Reconnect accepted. Your private chat is ready.");
+      } else if (!accept) {
+        notify("Reconnect declined. The requester's past quick chat was removed from their archives.");
+      }
     });
   const moderation = (action: string, targetId?: string, reason?: string) =>
     act(async () => {
@@ -1236,7 +1447,7 @@ export function App() {
           setKickReason("");
           setModal(null);
         }
-        await refreshChat();
+        await refreshChat(active.id, "room");
         if (action === "MUTE")
           notify(
             "Member muted for 30 minutes. Click Unmute to let them chat again.",
@@ -1271,7 +1482,7 @@ export function App() {
         delete next[requestId];
         return next;
       });
-      await refreshChat();
+      await refreshChat(active.id, "room");
       notify(
         accept
           ? "Request accepted. They are in the room now."
@@ -1298,14 +1509,7 @@ export function App() {
       try {
         await api(`/rooms/${room.id}/leave`, "POST", { next: true });
       } catch {}
-      if (ws.current?.readyState === 1)
-        try {
-          ws.current.send(
-            JSON.stringify({ type: "unsubscribe", roomId: room.id }),
-          );
-        } catch {}
-      setActive(null);
-      activeRef.current = null;
+      closeActiveRoom();
       setMobileNav(false);
       await loadSocial();
       await heartbeat();
@@ -1350,6 +1554,7 @@ export function App() {
   const isMuted = Boolean(
     active?.mutedUntil && Date.parse(active.mutedUntil) > Date.now(),
   );
+  const realtimeConnected = active ? roomConnected : connected;
   useEffect(() => {
     if (!active) return;
     const deadlines = [
@@ -1361,7 +1566,7 @@ export function App() {
       .filter((delay: number) => delay > 0);
     if (!deadlines.length) return;
     const timer = setTimeout(
-      () => background(refreshChat),
+      () => void refreshChat(active.id, "room"),
       Math.min(...deadlines) + 50,
     );
     return () => clearTimeout(timer);
@@ -1512,9 +1717,11 @@ export function App() {
                     onClick={() =>
                       act(async () => {
                         await api("/auth/logout", "POST", {});
+                        userRef.current = null;
                         setUser(null);
                         setCsrf("");
-                        setActive(null);
+                        cancelRoomOpen();
+                        closeActiveRoom();
                         setConversations([]);
                         setPending([]);
                       })
@@ -1577,11 +1784,11 @@ export function App() {
             </button>
             {user && (
               <span
-                className={`connection ${connected ? "on" : ""}`}
+                className={`connection ${realtimeConnected ? "on" : ""}`}
                 role="status"
-                aria-label={connected ? "Online" : "Reconnecting"}
+                aria-label={realtimeConnected ? "Online" : "Reconnecting"}
               >
-                {connected ? "Online" : "Reconnecting"}
+                {realtimeConnected ? "Online" : "Reconnecting"}
               </span>
             )}
             {!user && (
@@ -2119,6 +2326,20 @@ export function App() {
                           })}
                         </small>
                       </span>
+                      <div className="reconnect-notice-actions">
+                        <button
+                          className="button small"
+                          onClick={() => respondSocialRequest(request.id, true)}
+                        >
+                          Accept
+                        </button>
+                        <button
+                          className="text-button"
+                          onClick={() => respondSocialRequest(request.id, false)}
+                        >
+                          Decline
+                        </button>
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -2159,19 +2380,30 @@ export function App() {
                         </span>
                         <button
                           className="button secondary small past-chat-reconnect"
-                          disabled
+                          disabled={
+                            !user.verified ||
+                            !match.reconnectable ||
+                            match.reconnect_pending
+                          }
                           title={
                             !user.verified
                               ? "Verify your account before reconnecting"
                               : !match.reconnectable
                                 ? "Reconnect is unavailable for this account"
-                                : "Paid reconnect will be available when checkout is set up"
+                                : match.reconnect_pending
+                                  ? "Your reconnect request is waiting for their answer"
+                                  : "Send a reconnect request"
+                          }
+                          onClick={() =>
+                            request(match.id, "RECONNECT", match.archive_id)
                           }
                         >
                           {!user.verified
                             ? "Verify to reconnect"
                             : match.reconnectable
-                              ? "Pay to reconnect"
+                              ? match.reconnect_pending
+                                ? "Request pending"
+                                : "Request reconnect"
                               : "Unavailable"}
                         </button>
                       </article>
@@ -2217,12 +2449,6 @@ export function App() {
                       </span>
                       <button
                         className="button small"
-                        disabled={r.kind === "RECONNECT"}
-                        title={
-                          r.kind === "RECONNECT"
-                            ? "Paid reconnect checkout is not configured yet"
-                            : undefined
-                        }
                         onClick={() =>
                           act(async () => {
                             const result = await api(
@@ -2235,7 +2461,7 @@ export function App() {
                           })
                         }
                       >
-                        {r.kind === "RECONNECT" ? "Unavailable" : "Accept"}
+                        Accept
                       </button>
                       <button
                         className="text-button"
@@ -2497,8 +2723,7 @@ export function App() {
                     ? nextStranger()
                     : act(async () => {
                         await api(`/rooms/${active.id}/leave`, "POST", {});
-                        setActive(null);
-                        activeRef.current = null;
+                        if (activeRef.current?.id === active.id) closeActiveRoom();
                         setMobileNav(false);
                         await loadSocial();
                       })
@@ -2618,7 +2843,7 @@ export function App() {
                                     false,
                                 },
                               );
-                              await refreshChat();
+                              await refreshChat(active.id, "messages");
                             })
                           }
                         >
@@ -2675,8 +2900,6 @@ export function App() {
                     <QuickChatDisclosure
                       key={active.id}
                       userId={user.id}
-                      aslRevealed={Boolean(active.asl_revealed)}
-                      participants={active.participants || []}
                       sharing={active.pictureSharing}
                       busy={busy}
                       onDecision={(decision, pictureId) =>
@@ -2762,8 +2985,8 @@ export function App() {
                       value={draft}
                       onChange={(e) => {
                         setDraft(e.target.value);
-                        if (ws.current?.readyState === 1)
-                          ws.current.send(
+                        if (roomConnected)
+                          ws.current?.send(
                             JSON.stringify({
                               type: "typing",
                               roomId: active.id,
@@ -3564,7 +3787,7 @@ export function App() {
                     description: field(f, "description"),
                     slowMode: Number(field(f, "slow")),
                   });
-                  await refreshChat();
+                  await refreshChat(active.id, "room");
                   setModal(null);
                 });
               }}

@@ -319,6 +319,32 @@ test("concurrent room limits, matching, cancellation and contact acceptance", as
     );
     const matched = await (await b.api("/match", "POST", {})).json();
     expect(matched.roomId).toBeTruthy();
+    const roomPath = `/rooms/${matched.roomId}`;
+    const send = async (member: typeof a, text: string) => {
+      expect(
+        (
+          await member.api(`${roomPath}/messages`, "POST", {
+            text,
+            clientMessageId: crypto.randomUUID(),
+          })
+        ).status(),
+      ).toBe(201);
+    };
+    await send(a, "One two three four five six seven eight nine ten");
+    await send(b, "A B C D E F G H I");
+    const locked = await (await a.api(roomPath)).json();
+    expect(
+      locked.aslProgress
+        .map((person: { count: number }) => person.count)
+        .sort(),
+    ).toEqual([10, 9]);
+    expect(locked.asl_revealed).toBe(false);
+    expect(locked.pictureSharing.eligible).toBe(false);
+    await send(b, "J");
+    const unlocked = await (await b.api(roomPath)).json();
+    expect(unlocked.asl_revealed).toBe(true);
+    expect(unlocked.pictureSharing.eligible).toBe(true);
+    expect(unlocked.pictureSharing.participants).toEqual([]);
     const request = await (
       await a.api("/requests", "POST", {
         kind: "CONTACT",

@@ -7,27 +7,32 @@ export const visualIds = {
   contact: "20000000-0000-4000-8000-000000000002",
   public: "20000000-0000-4000-8000-000000000003",
 };
-export async function visualFixture(context: BrowserContext, signedIn = true) {
-  await context.addInitScript(() => {
-    class Socket {
-      static OPEN = 1;
-      static CONNECTING = 0;
-      static CLOSED = 3;
-      readyState = 0;
-      onopen: (() => void) | null = null;
-      constructor() {
-        queueMicrotask(() => {
-          this.readyState = 1;
-          this.onopen?.();
-        });
+export async function visualFixture(
+  context: BrowserContext,
+  signedIn = true,
+  { mockSockets = true } = {},
+) {
+  if (mockSockets)
+    await context.addInitScript(() => {
+      class Socket {
+        static OPEN = 1;
+        static CONNECTING = 0;
+        static CLOSED = 3;
+        readyState = 0;
+        onopen: (() => void) | null = null;
+        constructor() {
+          queueMicrotask(() => {
+            this.readyState = 1;
+            this.onopen?.();
+          });
+        }
+        send() {}
+        close() {
+          this.readyState = 3;
+        }
       }
-      send() {}
-      close() {
-        this.readyState = 3;
-      }
-    }
-    (globalThis as any).WebSocket = Socket;
-  });
+      (globalThis as any).WebSocket = Socket;
+    });
   const profile = {
     displayName: "Cora Lane",
     age: 31,

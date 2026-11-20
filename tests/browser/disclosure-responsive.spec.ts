@@ -199,7 +199,7 @@ for (const viewport of sizes) {
     await expect(
       page
         .locator(".profile-status")
-        .getByLabel("Your profile picture", { exact: true }),
+        .getByRole("group", { name: "Profile picture avatar", exact: true }),
     ).toBeVisible();
     await expect(page.locator(".profile-picture-settings")).toHaveCount(0);
     const picker = page.getByLabel("Replace profile picture");

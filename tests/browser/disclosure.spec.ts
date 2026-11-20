@@ -10,14 +10,15 @@ function snapshot(options: { count?: number; hasPicture?: boolean } = {}) {
     title: "Quick chat",
     state: "OPEN",
     online: 2,
-    asl_revealed: count >= 5,
+    asl_revealed: count >= 10,
     participants: [
       { id: visualIds.user, name: "Stranger", verified: true, asl: null },
       {
         id: visualIds.peer,
         name: "Stranger",
         verified: true,
-        asl: count >= 5 ? { age: 31, gender: "Woman", region: "Manila" } : null,
+        asl:
+          count >= 10 ? { age: 31, gender: "Woman", region: "Manila" } : null,
       },
     ],
     aslProgress: [
@@ -54,46 +55,51 @@ async function openQuickChat(page: Page) {
   await expect(page.locator(".chat")).toBeVisible();
 }
 
-test("ASL progress is shown above chat and details appear after both qualify", async ({
+test("word progress is shown and sharing appears only after ten words each", async ({
   page,
   context,
 }) => {
   await visualFixture(context);
-  const room = snapshot({ count: 4 });
-  room.aslProgress[1].count = 5;
+  const room = snapshot({ count: 9 });
+  room.aslProgress[1].count = 10;
   await page.route("**/api/match", (route) =>
     route.fulfill({ json: { roomId: room.id } }),
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
   await openQuickChat(page);
-  const progress = page.getByLabel("ASL reveal progress", { exact: true });
-  await expect(progress).toContainText("5 qualifying messages each");
-  await expect(progress).toContainText(/You\s*4\/5/);
-  await expect(progress).toContainText(/Stranger\s*5\/5/);
+  const progress = page.getByLabel("Quick chat progress", { exact: true });
+  await expect(progress).toContainText("10 words each to unlock sharing");
+  await expect(progress).toContainText(/You\s*9\/10/);
+  await expect(progress).toContainText(/Stranger\s*10\/10/);
   await expect(page.getByRole("progressbar", { name: "You" })).toHaveAttribute(
     "aria-valuenow",
-    "4",
+    "9",
   );
   await expect(page.locator(".quick-chat-disclosure")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toHaveCount(0);
-  room.aslProgress[0].count = 5;
+  room.aslProgress[0].count = 10;
   room.asl_revealed = true;
+  room.pictureSharing.eligible = true;
   room.participants[1].asl = { age: 31, gender: "Woman", region: "Manila" };
   await page
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("A new hello for you");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(progress).toHaveCount(0);
-  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
-  await expect(sharing).toContainText(
-    "Stranger: Age 31 · Sex Woman · Location Manila",
+  const stranger = page
+    .locator(".room-members .participant")
+    .filter({ hasText: "Age 31 · Sex Woman · Location Manila" });
+  await expect(stranger).toHaveCount(1);
+  await expect(stranger.locator(".member-profile")).toHaveText(
+    "Age 31 · Sex Woman · Location Manila",
   );
-  await expect(sharing).not.toContainText(/\d\/5/);
+  await expect(page.locator(".asl-disclosure-message")).toHaveCount(0);
+  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
-  ).toHaveCount(0);
+  ).toBeVisible();
 });
 
 test("a sent message is reconciled in its room after navigating away", async ({
@@ -453,6 +459,12 @@ test("profile picture upload waits for approval and restores the private preview
   const pictureId = "60000000-0000-4000-8000-000000000001";
   let saved = false;
   const operations: string[] = [];
+  await page.route("**/api/profile/picture/content**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#ddd1eb"/></svg>',
+    }),
+  );
   await page.route("**/api/profile/picture", (route) =>
     route.fulfill({
       json: {
@@ -506,12 +518,58 @@ test("profile picture upload waits for approval and restores the private preview
   expect(operations).toEqual(["init", "upload", "approve"]);
 });
 
+test("private profile picture preview can be retried after it fails to load", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  const pictureId = "60000000-0000-4000-8000-000000000001";
+  let attempts = 0;
+  await page.route("**/api/profile/picture", (route) =>
+    route.fulfill({
+      json: {
+        picture: { id: pictureId, url: "/api/profile/picture/content" },
+        uploadAvailable: false,
+      },
+    }),
+  );
+  await page.route("**/api/profile/picture/content**", (route) => {
+    attempts++;
+    if (attempts === 1) return route.fulfill({ status: 503 });
+    return route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#ddd1eb"/></svg>',
+    });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Your profile", exact: true })
+    .click();
+
+  const panel = page.getByLabel("Your profile picture", { exact: true });
+  await expect(
+    panel.getByText("Couldn’t load your picture preview.", { exact: true }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(
+    panel.getByAltText("Your private profile picture"),
+  ).toHaveJSProperty("naturalHeight", 80);
+  expect(attempts).toBe(2);
+});
+
 test("a rejected picture upload keeps the existing picture and allows retry", async ({
   page,
   context,
 }) => {
   await visualFixture(context);
   const pictureId = "60000000-0000-4000-8000-000000000001";
+  await page.route("**/api/profile/picture/content**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#ddd1eb"/></svg>',
+    }),
+  );
   await page.route("**/api/profile/picture", (route) =>
     route.fulfill({
       json: {
@@ -536,9 +594,11 @@ test("a rejected picture upload keeps the existing picture and allows retry", as
     mimeType: "image/png",
     buffer: Buffer.from([1, 2, 3, 4]),
   });
-  await expect(page.getByRole("alert")).toHaveText(
-    "Picture upload is temporarily unavailable",
-  );
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Picture upload is temporarily unavailable" }),
+  ).toHaveText("Picture upload is temporarily unavailable");
   await expect(page.getByAltText("Your private profile picture")).toBeVisible();
   await expect(page.getByLabel("Replace profile picture")).toBeEnabled();
 });

@@ -5,8 +5,8 @@ Initialized **2026-11-12**, adapting the Guardian ADR template. Existing applica
 | Existing ID | Established decision | Evidence / reconsideration |
 |---|---|---|
 | AD-01 | Hono REST/JSON public commands/queries; native Durable Object RPC internally | [SRS decisions](../../SRS.md#architecture-decisions), [Hono app](../../celld/http/app.ts), [contracts](../../packages/contracts/src/index.ts). Replacements need an actual requirement. |
-| AD-02 | Authenticated sockets for notifications/room/discovery; REST message writes | [Realtime design](../../ARCHITECTURE.md#frontend-and-transport), [client](../../src/realtime.ts), [Room](../../celld/durable-objects/room.ts). Revisit for demonstrated transport/recovery needs; IMP-08 remains open. |
-| AD-03 | Documented heartbeats, disconnected fallback and lifecycle timers | [SRS decisions](../../SRS.md#architecture-decisions), [App](../../src/App.tsx), [realtime client](../../src/realtime.ts). Changed timers need purpose, lifecycle and outage evidence. |
+| AD-02 | Authenticated sockets for notifications/room/discovery; REST message writes | [Realtime design](../../ARCHITECTURE.md#frontend-and-transport), [client](../../src/realtime.ts), [Room](../../celld/durable-objects/room.ts). The active room socket controls chat connectivity and fallback. See the [IMP-08 resolution](../IMPLEMENTATION_REVIEW.md#imp-08). |
+| AD-03 | Documented heartbeats, disconnected fallback and lifecycle timers | [SRS decisions](../../SRS.md#architecture-decisions), [App](../../src/App.tsx), [realtime client](../../src/realtime.ts). The active-room refresh combines triggers, skips in-flight polls and backs off on transient errors. See the [browser coverage](../../tests/browser/chat-refresh.spec.ts). |
 | AD-04 | Separate Cloudflare production, staging and PR Preview resources from Celld local/optional fleet configurations | [Cloudflare](../../wrangler.cloudflare.jsonc), [Preview setup](../../README.md#pull-request-previews), [Celld](../../wrangler.jsonc). PR Previews share staging D1/R2 and use isolated Durable Object namespaces; IMP-09–IMP-11 remain open. |
 | AD-05 | Reuse authorities/contracts and keep changes proportionate | [SRS decisions](../../SRS.md#architecture-decisions). Record consequential authorized changes with alternatives, migration/rollback and security/recovery evidence. |
 
@@ -45,9 +45,11 @@ These link to the existing baseline rather than granting new approval. For futur
 
 ## ADR-01: Private account pictures with room-scoped disclosure consent
 
+The 2026-11-20 word milestone supersedes the message counts and qualifying intervals described below. See [FR-12](../../SRS.md#quick-chat-disclosure-milestones-fr-12).
+
 - **Date/status:** 2026-11-12 / ACCEPTED for the original FR-12 implementation; its scanner prerequisite for profile photos was superseded by ADR-02. Verification is tracked in the implementation matrix.
 - **Problem:** Implement five-each ASL and ten-each voluntary picture sharing. The original profile has no picture storage; pictures must remain unavailable to a partner before their owner's approval, including through direct HTTP requests.
-- **Choice:** Keep meaningful-message counters and independent disclosure choices in the authoritative Room. Use fixed five/ten per-participant milestones without the legacy age/aggregate gates. Keep profile pictures in a separate private D1/R2 lifecycle governed by AppCoordinator, using the existing scanner's quarantine, sanitized-output and scoped capability conventions. Add an append-only D1 migration; retain existing Durable Object bindings and stored participant JSON with compatible optional fields.
+- **Choice:** Keep meaningful-message counters and independent disclosure choices in the authoritative Room. Use fixed five/ten per-participant milestones without the legacy age/aggregate gates. Keep profile pictures in a separate private D1/R2 lifecycle governed by AppCoordinator. The original implementation used scanner quarantine; ADR-02 supersedes that prerequisite for profile pictures only. Room attachments remain scanner-gated. Add an append-only D1 migration; retain existing Durable Object bindings and stored participant JSON with compatible optional fields.
 
 | Alternative | Assessment |
 | --- | --- |

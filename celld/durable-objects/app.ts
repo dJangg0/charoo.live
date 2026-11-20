@@ -436,6 +436,7 @@ export class AppCoordinator extends DurableObject<Env> {
             requireThat(u?.verified, 403, "Verify your email first");
             const b = requestSchema.parse(input);
             const target = await user(env, b.targetId);
+            let requestExpiresAt = iso(Date.now() + 86400000);
             requireThat(
               target.verified && target.id !== u.id,
               400,
@@ -447,20 +448,18 @@ export class AppCoordinator extends DurableObject<Env> {
               "Request unavailable",
             );
             if (b.kind === "RECONNECT") {
+              requireThat(b.roomId, 400, "A past quick chat is required");
+              const archive = await first(
+                env,
+                "SELECT expires_at FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=? AND expires_at>?",
+                [u.id, target.id, b.roomId, iso()],
+              );
               requireThat(
-                await first(
-                  env,
-                  "SELECT 1 FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND expires_at>?",
-                  [u.id, target.id, iso()],
-                ),
+                archive,
                 404,
                 "Reconnect window expired",
               );
-              requireThat(
-                false,
-                402,
-                "Paid reconnect checkout is not available yet",
-              );
+              requestExpiresAt = archive.expires_at;
             } else {
               requireThat(b.roomId, 400, "A shared conversation is required");
               unwrap(await roomStub(env, b.roomId).authorize(actor!, false));
@@ -473,9 +472,16 @@ export class AppCoordinator extends DurableObject<Env> {
             );
             const previous = await first(
               env,
-              "SELECT id FROM social_requests WHERE requester_id=? AND target_id=? AND kind=? AND state='PENDING'",
+              "SELECT id,source_room_id FROM social_requests WHERE requester_id=? AND target_id=? AND kind=? AND state='PENDING'",
               [u.id, target.id, b.kind],
             );
+            if (b.kind === "RECONNECT")
+              requireThat(
+                !previous || previous.source_room_id === b.roomId,
+                409,
+                "A reconnect request is already pending for this user",
+              );
+            if (b.kind === "RECONNECT" && previous) return { id: previous.id };
             const id = previous?.id || crypto.randomUUID();
             await this.effect(
               "event",
@@ -501,7 +507,7 @@ export class AppCoordinator extends DurableObject<Env> {
                         b.kind,
                         b.roomId || null,
                         iso(),
-                        iso(Date.now() + 86400000),
+                        requestExpiresAt,
                       ],
                     ),
                   ],
@@ -516,21 +522,29 @@ export class AppCoordinator extends DurableObject<Env> {
               [input.id, u.id],
             );
             requireThat(r && r.expires_at > iso(), 404, "Request unavailable");
-            if (input.accept && r.kind === "RECONNECT")
-              requireThat(
-                false,
-                402,
-                "Paid reconnect checkout is not available yet",
-              );
-            if (r.state === "ACCEPTED")
-              return { roomId: r.result_room_id, requesterId: r.requester_id };
-            requireThat(r.state === "PENDING", 404, "Request unavailable");
+            requireThat(
+              r.state === "PENDING" || r.state === "ACCEPTED",
+              404,
+              "Request unavailable",
+            );
             await user(env, r.requester_id);
             requireThat(
               !(await blocked(env, u.id, r.requester_id)),
               403,
               "Request unavailable",
             );
+            if (r.state === "ACCEPTED")
+              return { roomId: r.result_room_id, requesterId: r.requester_id };
+            if (
+              input.accept &&
+              r.kind === "RECONNECT" &&
+              !(await first(
+                env,
+                "SELECT 1 FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=? AND expires_at>?",
+                [r.requester_id, u.id, r.source_room_id, iso()],
+              ))
+            )
+              requireThat(false, 404, "Reconnect window expired");
             let roomId: string | null = null;
             if (input.accept) {
               const [a, b] = [u.id, r.requester_id].sort();
@@ -585,13 +599,30 @@ export class AppCoordinator extends DurableObject<Env> {
                   ),
                 );
               await env.DB.batch(writes);
+            } else if (r.kind === "RECONNECT") {
+              await env.DB.batch([
+                stmt(
+                  env,
+                  "UPDATE social_requests SET state='REJECTED' WHERE id=? AND state='PENDING'",
+                  [r.id],
+                ),
+                stmt(
+                  env,
+                  "DELETE FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=?",
+                  [r.requester_id, u.id, r.source_room_id],
+                ),
+              ]);
             } else
               await run(
                 env,
                 "UPDATE social_requests SET state='REJECTED' WHERE id=?",
                 [r.id],
               );
-            const outcome = { roomId, requesterId: r.requester_id };
+            const outcome = {
+              roomId,
+              requesterId: r.requester_id,
+              accepted: !!input.accept,
+            };
             await this.enqueue("event", {
               type: "request.responded",
               userIds: [u.id, r.requester_id],

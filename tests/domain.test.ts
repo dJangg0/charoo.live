@@ -633,6 +633,250 @@ describe("Durable authorities and coordination", () => {
       (await f.db.prepare("SELECT * FROM sessions").all()).results,
     ).toHaveLength(1);
   });
+  it("creates a reconnect request from one exact unexpired archive and accepts it", async () => {
+    const f = await fixture(),
+      requester = await f.guest(true),
+      recipient = await f.guest(true),
+      sourceRoomId = crypto.randomUUID();
+    await f.db
+      .prepare(
+        "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
+      )
+      .bind(
+        requester.actor.userId,
+        recipient.actor.userId,
+        sourceRoomId,
+        iso(),
+        iso(),
+        iso(Date.now() + 86400000),
+      )
+      .run();
+
+    const unavailable = await f.app.command(requester.actor, "social.create", {
+      kind: "RECONNECT",
+      targetId: recipient.actor.userId,
+      roomId: crypto.randomUUID(),
+    });
+    expect(unavailable).toMatchObject({ ok: false, status: 404 });
+
+    const request = unwrap(
+      await f.app.command(requester.actor, "social.create", {
+        kind: "RECONNECT",
+        targetId: recipient.actor.userId,
+        roomId: sourceRoomId,
+      }),
+    );
+    const duplicate = unwrap(
+      await f.app.command(requester.actor, "social.create", {
+        kind: "RECONNECT",
+        targetId: recipient.actor.userId,
+        roomId: sourceRoomId,
+      }),
+    );
+    expect(duplicate.id).toBe(request.id);
+    expect(
+      await f.db
+        .prepare("SELECT state,source_room_id FROM social_requests WHERE id=?")
+        .bind(request.id)
+        .first(),
+    ).toEqual({ state: "PENDING", source_room_id: sourceRoomId });
+
+    const accepted = unwrap(
+      await f.app.command(recipient.actor, "social.respond", {
+        id: request.id,
+        accept: true,
+      }),
+    );
+    expect(accepted).toMatchObject({
+      accepted: true,
+      requesterId: requester.actor.userId,
+      roomId: expect.any(String),
+    });
+    expect(
+      await f.db
+        .prepare("SELECT type,creator_id FROM room_index WHERE id=?")
+        .bind(accepted.roomId)
+        .first(),
+    ).toMatchObject({ type: "PRIVATE", creator_id: requester.actor.userId });
+    expect(
+      await f.db
+        .prepare("SELECT state,result_room_id FROM social_requests WHERE id=?")
+        .bind(request.id)
+        .first(),
+    ).toEqual({ state: "ACCEPTED", result_room_id: accepted.roomId });
+  });
+
+  it("rejects acceptance after the source archive expires", async () => {
+    const f = await fixture(),
+      requester = await f.guest(true),
+      recipient = await f.guest(true),
+      sourceRoomId = crypto.randomUUID();
+    await f.db
+      .prepare(
+        "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
+      )
+      .bind(
+        requester.actor.userId,
+        recipient.actor.userId,
+        sourceRoomId,
+        iso(),
+        iso(),
+        iso(Date.now() + 86400000),
+      )
+      .run();
+    const request = unwrap(
+      await f.app.command(requester.actor, "social.create", {
+        kind: "RECONNECT",
+        targetId: recipient.actor.userId,
+        roomId: sourceRoomId,
+      }),
+    );
+    await f.db
+      .prepare("UPDATE quick_chat_archives SET expires_at=? WHERE room_id=?")
+      .bind(iso(Date.now() - 1), sourceRoomId)
+      .run();
+
+    expect(
+      await f.app.command(recipient.actor, "social.respond", {
+        id: request.id,
+        accept: true,
+      }),
+    ).toMatchObject({ ok: false, status: 404 });
+    expect(
+      await f.db
+        .prepare("SELECT state FROM social_requests WHERE id=?")
+        .bind(request.id)
+        .first(),
+    ).toEqual({ state: "PENDING" });
+  });
+
+  it("expires reconnect requests with their source archive", async () => {
+    const f = await fixture(),
+      requester = await f.guest(true),
+      recipient = await f.guest(true),
+      sourceRoomId = crypto.randomUUID(),
+      sourceExpiresAt = iso(Date.now() + 3600000);
+    await f.db
+      .prepare(
+        "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
+      )
+      .bind(
+        requester.actor.userId,
+        recipient.actor.userId,
+        sourceRoomId,
+        iso(),
+        iso(),
+        sourceExpiresAt,
+      )
+      .run();
+
+    const request = unwrap(
+      await f.app.command(requester.actor, "social.create", {
+        kind: "RECONNECT",
+        targetId: recipient.actor.userId,
+        roomId: sourceRoomId,
+      }),
+    );
+    expect(
+      await f.db
+        .prepare("SELECT expires_at FROM social_requests WHERE id=?")
+        .bind(request.id)
+        .first(),
+    ).toEqual({ expires_at: sourceExpiresAt });
+  });
+
+  it("rejecting a reconnect removes only its source archive from the requester", async () => {
+    const f = await fixture(),
+      requester = await f.guest(true),
+      recipient = await f.guest(true),
+      sourceRoomId = crypto.randomUUID(),
+      otherRoomId = crypto.randomUUID();
+    for (const roomId of [sourceRoomId, otherRoomId])
+      await f.db
+        .prepare(
+          "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
+        )
+        .bind(
+          requester.actor.userId,
+          recipient.actor.userId,
+          roomId,
+          iso(),
+          iso(),
+          iso(Date.now() + 86400000),
+        )
+        .run();
+    const request = unwrap(
+      await f.app.command(requester.actor, "social.create", {
+        kind: "RECONNECT",
+        targetId: recipient.actor.userId,
+        roomId: sourceRoomId,
+      }),
+    );
+
+    expect(
+      unwrap(
+        await f.app.command(recipient.actor, "social.respond", {
+          id: request.id,
+          accept: false,
+        }),
+      ),
+    ).toMatchObject({ roomId: null, accepted: false });
+    expect(
+      await f.db
+        .prepare("SELECT state FROM social_requests WHERE id=?")
+        .bind(request.id)
+        .first(),
+    ).toEqual({ state: "REJECTED" });
+    expect(
+      await f.db
+        .prepare("SELECT room_id FROM quick_chat_archives WHERE user_id=? ORDER BY room_id")
+        .bind(requester.actor.userId)
+        .all(),
+    ).toMatchObject({ results: [{ room_id: otherRoomId }] });
+  });
+
+  it("does not allow reconnect after a current block", async () => {
+    const f = await fixture(),
+      requester = await f.guest(true),
+      recipient = await f.guest(true),
+      sourceRoomId = crypto.randomUUID();
+    await f.db
+      .prepare(
+        "INSERT INTO quick_chat_archives(user_id,peer_id,room_id,last_chatted_at,archived_at,expires_at) VALUES(?,?,?,?,?,?)",
+      )
+      .bind(
+        requester.actor.userId,
+        recipient.actor.userId,
+        sourceRoomId,
+        iso(),
+        iso(),
+        iso(Date.now() + 86400000),
+      )
+      .run();
+    const request = unwrap(
+      await f.app.command(requester.actor, "social.create", {
+        kind: "RECONNECT",
+        targetId: recipient.actor.userId,
+        roomId: sourceRoomId,
+      }),
+    );
+    unwrap(
+      await f.app.command(recipient.actor, "block", {
+        targetId: requester.actor.userId,
+      }),
+    );
+
+    expect(
+      await f.app.command(recipient.actor, "social.respond", {
+        id: request.id,
+        accept: true,
+      }),
+    ).toMatchObject({ ok: false, status: 404 });
+    expect(
+      await f.db.prepare("SELECT * FROM room_index").all(),
+    ).toMatchObject({ results: [] });
+  });
+
   it("recovers contact acceptance without another client submission", async () => {
     const f = await fixture(),
       a = await f.guest(true),

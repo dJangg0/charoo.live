@@ -282,17 +282,29 @@ export function RoomSidebar({
                   <span className="blocked-badge">Blocked by you</span>
                 )}
               </div>
-              {member.asl && (
-                <p className="member-profile">
-                  {[
-                    member.asl.age ? `Age ${member.asl.age}` : "",
-                    member.asl.gender,
-                    member.asl.region,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              )}
+              {member.asl &&
+                (room.type !== "STRANGER" ||
+                  (user && member.id !== user.id)) && (
+                  <p className="member-profile">
+                    {room.type === "STRANGER"
+                      ? [
+                          member.asl.age ? `Age ${member.asl.age}` : "",
+                          member.asl.gender ? `Sex ${member.asl.gender}` : "",
+                          member.asl.region
+                            ? `Location ${member.asl.region}`
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : [
+                          member.asl.age ? `Age ${member.asl.age}` : "",
+                          member.asl.gender,
+                          member.asl.region,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                  </p>
+                )}
               {member.id !== user?.id && (
                 <>
                   {(isOwner || room.type !== "STRANGER") && (

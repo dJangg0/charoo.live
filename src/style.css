@@ -1170,9 +1170,8 @@ dialog label {
   overflow-wrap: anywhere;
 }
 .picture-sharing-notice {
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
-  margin-top: 12px;
+  margin-top: 0;
+  border: 1px solid var(--line);
 }
 .picture-sharing-actions {
   display: flex;

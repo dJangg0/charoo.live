@@ -131,8 +131,18 @@ export function socialRoutes(app: Hono<HttpEnv>) {
     return c.json(
       await all(
         c.env,
-        `SELECT a.room_id AS archive_id,u.id,u.display_name,a.last_chatted_at,a.archived_at,a.expires_at,u.verified AS reconnectable FROM quick_chat_archives a JOIN users u ON u.id=a.peer_id WHERE a.user_id=? AND a.expires_at>? AND u.banned=0 AND (u.suspended_until IS NULL OR u.suspended_until<=?) AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=? AND b.target_id=u.id) OR (b.target_id=? AND b.user_id=u.id)) ORDER BY a.archived_at DESC`,
-        [id, iso(), iso(), id, id],
+        `SELECT a.room_id AS archive_id,u.id,u.display_name,a.last_chatted_at,a.archived_at,a.expires_at,u.verified AS reconnectable,
+          EXISTS(
+            SELECT 1 FROM social_requests s
+            WHERE s.requester_id=a.user_id AND s.target_id=a.peer_id
+              AND s.kind='RECONNECT' AND s.state='PENDING' AND s.expires_at>?
+          ) AS reconnect_pending
+        FROM quick_chat_archives a JOIN users u ON u.id=a.peer_id
+        WHERE a.user_id=? AND a.expires_at>? AND u.banned=0
+          AND (u.suspended_until IS NULL OR u.suspended_until<=?)
+          AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=? AND b.target_id=u.id) OR (b.target_id=? AND b.user_id=u.id))
+        ORDER BY a.archived_at DESC`,
+        [iso(), id, iso(), iso(), id, id],
       ),
     );
   });

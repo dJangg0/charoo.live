@@ -5377,14 +5377,14 @@ canvas {
     gap: 12px;
     width: min(100%, 300px);
   }
-  .chat:has(.quick-chat-disclosure) .chat-head {
+  .chat.quick-chat .chat-head {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
     padding: 10px 14px;
   }
-  .chat:has(.quick-chat-disclosure) .chat-head > .button {
+  .chat.quick-chat .chat-head > .button {
     padding: 8px 10px;
     font-size: 11px;
   }

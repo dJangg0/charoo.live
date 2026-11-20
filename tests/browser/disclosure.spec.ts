@@ -88,10 +88,15 @@ test("word progress is shown and sharing appears only after ten words each", asy
     .fill("A new hello for you");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(progress).toHaveCount(0);
-  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
-  await expect(sharing).toContainText(
-    "Stranger: Age 31 · Sex Woman · Location Manila",
+  const stranger = page
+    .locator(".room-members .participant")
+    .filter({ hasText: "Age 31 · Sex Woman · Location Manila" });
+  await expect(stranger).toHaveCount(1);
+  await expect(stranger.locator(".member-profile")).toHaveText(
+    "Age 31 · Sex Woman · Location Manila",
   );
+  await expect(page.locator(".asl-disclosure-message")).toHaveCount(0);
+  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toBeVisible();

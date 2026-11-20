@@ -2900,8 +2900,6 @@ export function App() {
                     <QuickChatDisclosure
                       key={active.id}
                       userId={user.id}
-                      aslRevealed={Boolean(active.asl_revealed)}
-                      participants={active.participants || []}
                       sharing={active.pictureSharing}
                       busy={busy}
                       onDecision={(decision, pictureId) =>

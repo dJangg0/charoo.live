@@ -1,8 +1,14 @@
 # Charoo shared engineering handoff
 
+## Quick-chat ASL in the left sidebar, 2026-11-20
+
+- After the existing ten-word-each gate, the left room sidebar shows only the other participant’s permitted ASL beneath their “Stranger” entry. Both participants get the same perspective-relative behavior. The viewer’s own ASL stays hidden in quick chat; picture consent remains in its own panel.
+- Changed `src/RoomSidebar.tsx`, `src/QuickChatDisclosure.tsx`, `src/App.tsx`, FR-12 in `SRS.md`, README quick-chat guidance, the implementation matrix and an existing browser assertion. The backend gate, profile visibility and persisted messages are unchanged.
+- PASS: `git diff --check`, `pnpm check` (121 tests), and `pnpm test:native` (9 runtime scenarios plus 58 browser cases against each the built app and Vite, including the sidebar disclosure assertion). No deployment or remote migration. Task details: `.context/handoffs/asl-chat-message-root.md`.
+
 ## Quick-chat word milestone, 2026-11-20
 
-- Quick chat now displays two word progress bars. Ten words from each participant unlock permitted ASL and the picture-sharing choice. Photo access still requires the owner's room-specific approval. Existing open rooms restore counts from retained encrypted messages.
+- Quick chat displays two word progress bars. Ten words from each participant unlock permitted ASL under the other participant’s entry in the left sidebar and the picture-sharing choice. Photo access still requires the owner's room-specific approval. Existing open rooms restore counts from retained encrypted messages.
 - Passed `pnpm check` (121 tests), the native and browser suites, the Cloudflare dry run and local workerd threshold and privacy checks. The fix is local to this workspace. [Verification](IMPLEMENTATION_MATRIX.md#fr-12-implementation)
 - Checkpoint is `.context/handoffs/quick-chat-word-progress-root.md`.
 

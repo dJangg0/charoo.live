@@ -75,117 +75,80 @@ export function QuickChatProgress({
 
 export function QuickChatDisclosure({
   userId,
-  aslRevealed,
-  participants,
   sharing,
   busy,
   onDecision,
 }: {
   userId: string;
-  aslRevealed: boolean;
-  participants: {
-    id: string;
-    asl?: { age: number | null; gender: string; region: string } | null;
-  }[];
   sharing?: PictureSharing;
   busy: boolean;
   onDecision: (decision: "approved" | "declined", pictureId?: string) => void;
 }) {
-  const asl = aslRevealed
-    ? participants.flatMap((person) => {
-        const values = person.asl
-          ? [
-              person.asl.age ? `Age ${person.asl.age}` : "",
-              person.asl.gender ? `Sex ${person.asl.gender}` : "",
-              person.asl.region ? `Location ${person.asl.region}` : "",
-            ].filter(Boolean)
-          : [];
-        return values.length
-          ? [
-              {
-                id: person.id,
-                label: person.id === userId ? "You" : "Stranger",
-                values,
-              },
-            ]
-          : [];
-      })
-    : [];
-  if (!asl.length && !sharing?.eligible) return null;
+  if (!sharing?.eligible) return null;
 
   return (
-    <div className="quick-chat-disclosure" aria-label="Quick chat sharing">
-      {asl.map((person) => (
-        <p className="disclosure-asl" key={person.id}>
-          <strong>{person.label}:</strong> {person.values.join(" · ")}
+    <section
+      className="quick-chat-disclosure picture-sharing-notice"
+      aria-label="Quick chat sharing"
+    >
+      <p className="picture-sharing-milestone" role="status">
+        <Eye size={17} aria-hidden="true" />
+        <strong>Picture sharing is now available.</strong>
+      </p>
+      {!sharing.self.hasPicture ? (
+        <p>
+          You don’t have a profile picture to share. Your picture stays hidden.
         </p>
-      ))}
-      {sharing?.eligible && (
-        <section
-          className="picture-sharing-notice"
-          aria-label="Profile picture sharing"
-        >
-          <p className="picture-sharing-milestone" role="status">
-            <Eye size={17} aria-hidden="true" />
-            <strong>Picture sharing is now available.</strong>
-          </p>
-          {!sharing.self.hasPicture ? (
-            <p>
-              You don’t have a profile picture to share. Your picture stays
-              hidden.
-            </p>
-          ) : sharing.self.decision === "approved" ? (
-            <p>You chose to show your profile picture in this chat.</p>
-          ) : (
-            <div className="picture-sharing-choice">
-              {sharing.self.previewUrl && (
-                <img
-                  className="consent-picture-preview"
-                  src={sharing.self.previewUrl}
-                  alt="The profile picture you can choose to share"
-                />
-              )}
-              <p>
-                {sharing.self.decision === "declined"
-                  ? "You can show your profile picture whenever you want."
-                  : "Would you like to show your profile picture to this person? Only your picture will be shared, in this chat."}
-              </p>
-              <div className="picture-sharing-actions">
-                <button
-                  type="button"
-                  className="button small"
-                  disabled={busy}
-                  onClick={() =>
-                    onDecision("approved", sharing.self.pictureId || undefined)
-                  }
-                >
-                  Show my profile picture
-                </button>
-                {sharing.self.decision === "pending" && (
-                  <button
-                    type="button"
-                    className="button secondary small"
-                    disabled={busy}
-                    onClick={() => onDecision("declined")}
-                  >
-                    Not now
-                  </button>
-                )}
-              </div>
-            </div>
+      ) : sharing.self.decision === "approved" ? (
+        <p>You chose to show your profile picture in this chat.</p>
+      ) : (
+        <div className="picture-sharing-choice">
+          {sharing.self.previewUrl && (
+            <img
+              className="consent-picture-preview"
+              src={sharing.self.previewUrl}
+              alt="The profile picture you can choose to share"
+            />
           )}
-          {sharing.participants
-            .filter((person) => person.id !== userId)
-            .map((person) => (
-              <figure className="shared-profile-picture" key={person.id}>
-                <figcaption role="status">
-                  Stranger chose to show you their profile picture.
-                </figcaption>
-                <img src={person.url} alt="Stranger’s shared profile picture" />
-              </figure>
-            ))}
-        </section>
+          <p>
+            {sharing.self.decision === "declined"
+              ? "You can show your profile picture whenever you want."
+              : "Would you like to show your profile picture to this person? Only your picture will be shared, in this chat."}
+          </p>
+          <div className="picture-sharing-actions">
+            <button
+              type="button"
+              className="button small"
+              disabled={busy}
+              onClick={() =>
+                onDecision("approved", sharing.self.pictureId || undefined)
+              }
+            >
+              Show my profile picture
+            </button>
+            {sharing.self.decision === "pending" && (
+              <button
+                type="button"
+                className="button secondary small"
+                disabled={busy}
+                onClick={() => onDecision("declined")}
+              >
+                Not now
+              </button>
+            )}
+          </div>
+        </div>
       )}
-    </div>
+      {sharing.participants
+        .filter((person) => person.id !== userId)
+        .map((person) => (
+          <figure className="shared-profile-picture" key={person.id}>
+            <figcaption role="status">
+              Stranger chose to show you their profile picture.
+            </figcaption>
+            <img src={person.url} alt="Stranger’s shared profile picture" />
+          </figure>
+        ))}
+    </section>
   );
 }

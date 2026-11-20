@@ -45,6 +45,8 @@ These link to the existing baseline rather than granting new approval. For futur
 
 ## ADR-01: Private account pictures with room-scoped disclosure consent
 
+The 2026-11-20 word milestone supersedes the message counts and qualifying intervals described below. See [FR-12](../../SRS.md#quick-chat-disclosure-milestones-fr-12).
+
 - **Date/status:** 2026-11-12 / ACCEPTED for the original FR-12 implementation; its scanner prerequisite for profile photos was superseded by ADR-02. Verification is tracked in the implementation matrix.
 - **Problem:** Implement five-each ASL and ten-each voluntary picture sharing. The original profile has no picture storage; pictures must remain unavailable to a partner before their owner's approval, including through direct HTTP requests.
 - **Choice:** Keep meaningful-message counters and independent disclosure choices in the authoritative Room. Use fixed five/ten per-participant milestones without the legacy age/aggregate gates. Keep profile pictures in a separate private D1/R2 lifecycle governed by AppCoordinator. The original implementation used scanner quarantine; ADR-02 supersedes that prerequisite for profile pictures only. Room attachments remain scanner-gated. Add an append-only D1 migration; retain existing Durable Object bindings and stored participant JSON with compatible optional fields.

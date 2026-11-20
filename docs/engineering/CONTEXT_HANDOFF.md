@@ -1,5 +1,16 @@
 # Charoo shared engineering handoff
 
+## Quick-chat word milestone, 2026-11-20
+
+- Quick chat now displays two word progress bars. Ten words from each participant unlock permitted ASL and the picture-sharing choice. Photo access still requires the owner's room-specific approval. Existing open rooms restore counts from retained encrypted messages.
+- Passed `pnpm check` (121 tests), the native and browser suites, the Cloudflare dry run and local workerd threshold and privacy checks. The fix is local to this workspace. [Verification](IMPLEMENTATION_MATRIX.md#fr-12-implementation)
+- Checkpoint is `.context/handoffs/quick-chat-word-progress-root.md`.
+
+## Cloudflare branch checks, 2026-11-19
+
+- Restored the production branch guard in `deploy:cloudflare` and added a test for wiring both publish commands to their guards. `pnpm check` passed 121 tests. With Workers Builds reporting `staging`, the production command exited before build or deploy.
+- The project owner confirmed that Cloudflare maps `main` to `charoo-live` and `staging` to `charoo-live-staging`. Cloudflare returned 403 on direct reads of Workers Builds settings and logs. Earlier deployment history confirmed that production stayed on its November 17 version after PR #5 merged to staging. Production Preview Builds is the setting that controls additional build activity from other branches.
+
 ## Active chat refresh, 2026-11-19
 
 - In `tbilisi` on `dJangg0/image-spamming-concurrency` at staging base `b1fc9ce`, fixed IMP-08 and the overlapping refreshes reported with it. The active room socket drives fallback. Message updates share one refresh at a time, and duplicate send/socket notifications and already recorded read receipts skip extra work.

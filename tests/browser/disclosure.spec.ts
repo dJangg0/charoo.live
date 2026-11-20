@@ -10,14 +10,15 @@ function snapshot(options: { count?: number; hasPicture?: boolean } = {}) {
     title: "Quick chat",
     state: "OPEN",
     online: 2,
-    asl_revealed: count >= 5,
+    asl_revealed: count >= 10,
     participants: [
       { id: visualIds.user, name: "Stranger", verified: true, asl: null },
       {
         id: visualIds.peer,
         name: "Stranger",
         verified: true,
-        asl: count >= 5 ? { age: 31, gender: "Woman", region: "Manila" } : null,
+        asl:
+          count >= 10 ? { age: 31, gender: "Woman", region: "Manila" } : null,
       },
     ],
     aslProgress: [
@@ -54,32 +55,33 @@ async function openQuickChat(page: Page) {
   await expect(page.locator(".chat")).toBeVisible();
 }
 
-test("ASL progress is shown above chat and details appear after both qualify", async ({
+test("word progress is shown and sharing appears only after ten words each", async ({
   page,
   context,
 }) => {
   await visualFixture(context);
-  const room = snapshot({ count: 4 });
-  room.aslProgress[1].count = 5;
+  const room = snapshot({ count: 9 });
+  room.aslProgress[1].count = 10;
   await page.route("**/api/match", (route) =>
     route.fulfill({ json: { roomId: room.id } }),
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
   await openQuickChat(page);
-  const progress = page.getByLabel("ASL reveal progress", { exact: true });
-  await expect(progress).toContainText("5 qualifying messages each");
-  await expect(progress).toContainText(/You\s*4\/5/);
-  await expect(progress).toContainText(/Stranger\s*5\/5/);
+  const progress = page.getByLabel("Quick chat progress", { exact: true });
+  await expect(progress).toContainText("10 words each to unlock sharing");
+  await expect(progress).toContainText(/You\s*9\/10/);
+  await expect(progress).toContainText(/Stranger\s*10\/10/);
   await expect(page.getByRole("progressbar", { name: "You" })).toHaveAttribute(
     "aria-valuenow",
-    "4",
+    "9",
   );
   await expect(page.locator(".quick-chat-disclosure")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toHaveCount(0);
-  room.aslProgress[0].count = 5;
+  room.aslProgress[0].count = 10;
   room.asl_revealed = true;
+  room.pictureSharing.eligible = true;
   room.participants[1].asl = { age: 31, gender: "Woman", region: "Manila" };
   await page
     .getByRole("textbox", { name: "Message", exact: true })
@@ -90,10 +92,9 @@ test("ASL progress is shown above chat and details appear after both qualify", a
   await expect(sharing).toContainText(
     "Stranger: Age 31 · Sex Woman · Location Manila",
   );
-  await expect(sharing).not.toContainText(/\d\/5/);
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
-  ).toHaveCount(0);
+  ).toBeVisible();
 });
 
 test("a sent message is reconciled in its room after navigating away", async ({
@@ -508,10 +509,7 @@ test("profile picture upload waits for approval and restores the private preview
   ).toBeVisible();
   await expect(
     page.getByAltText("Your private profile picture"),
-  ).toHaveAttribute(
-    "src",
-    `/api/profile/picture/content?v=${pictureId}`,
-  );
+  ).toHaveAttribute("src", `/api/profile/picture/content?v=${pictureId}`);
   expect(operations).toEqual(["init", "upload", "approve"]);
 });
 

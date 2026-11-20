@@ -2,7 +2,10 @@ import {
   currentPicture,
   pictureById,
 } from "../features/profile-pictures/state";
-import { pictureSharingDecisionSchema } from "@charoo/contracts";
+import {
+  pictureSharingDecisionSchema,
+  QUICK_CHAT_DISCLOSURE_WORDS,
+} from "@charoo/contracts";
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { messageSchema, z } from "@charoo/contracts";
@@ -23,7 +26,7 @@ import {
   type Actor,
   type RoomRecord,
 } from "../shared/data";
-import { encrypt, decrypt, fingerprint, meaningful } from "../shared/crypto";
+import { encrypt, decrypt, fingerprint } from "../shared/crypto";
 import { HttpError, requireThat, result, type Result } from "../shared/errors";
 import { sendSocket, closeSocket } from "../shared/sockets";
 import { endCall } from "../features/providers/livekit";
@@ -32,8 +35,7 @@ type Participant = {
   state: "JOINED" | "LEFT" | "REMOVED";
   joined_at: string;
   muted_until: string | null;
-  meaningful_count: number;
-  last_qualifying_at: string | null;
+  word_count?: number;
   last_message_at: string | null;
   read_at: string | null;
   presence_until: number;
@@ -79,7 +81,20 @@ type Call = {
   media_terminated: boolean;
 };
 type SocketState = { actor: Actor };
+const wordSegmenter = new Intl.Segmenter("en", { granularity: "word" });
+
+function disclosureWords(text: string) {
+  let words = 0;
+  for (const { segment, isWordLike } of wordSegmenter.segment(text)) {
+    if (isWordLike && /\p{L}/u.test(segment)) words++;
+    if (words === QUICK_CHAT_DISCLOSURE_WORDS) break;
+  }
+  return words;
+}
+
 export class Room extends DurableObject<Env> {
+  private disclosureUpgrade?: Promise<void>;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql
@@ -157,8 +172,7 @@ export class Room extends DurableObject<Env> {
       state: "JOINED",
       joined_at: iso(),
       muted_until: null,
-      meaningful_count: 0,
-      last_qualifying_at: null,
+      word_count: 0,
       last_message_at: null,
       read_at: null,
       presence_until: Date.now() + 90000,
@@ -208,19 +222,94 @@ export class Room extends DurableObject<Env> {
     this.save(r);
     this.outbox("projection", {});
   }
-  private disclosureEligible(threshold: number) {
+  private disclosureEligible() {
     const people = this.people();
     return (
       this.meta().type === "STRANGER" &&
       people.length === 2 &&
       people.every(
-        (p) => p.state === "JOINED" && p.meaningful_count >= threshold,
+        (p) =>
+          p.state === "JOINED" &&
+          (p.word_count ?? 0) >= QUICK_CHAT_DISCLOSURE_WORDS,
       )
+    );
+  }
+  private async ensureDisclosureWordCounts(roomId: string) {
+    const legacy = this.people().filter((p) => p.word_count === undefined);
+    if (!legacy.length) return;
+    // Message writes in a legacy room wait for this same backfill before committing.
+    this.disclosureUpgrade ??= this.backfillDisclosureWords(
+      roomId,
+      legacy,
+    ).finally(() => {
+      this.disclosureUpgrade = undefined;
+    });
+    await this.disclosureUpgrade;
+  }
+  private async backfillDisclosureWords(roomId: string, legacy: Participant[]) {
+    const progress = new Map(
+      legacy.map((p) => [
+        p.user_id,
+        { words: 0, fingerprints: new Set<string>() },
+      ]),
+    );
+    let after = 0;
+    while (
+      [...progress.values()].some((p) => p.words < QUICK_CHAT_DISCLOSURE_WORDS)
+    ) {
+      const rows = this.rows<{
+        rowid: number;
+        sender_id: string;
+        ciphertext: string;
+      }>(
+        "SELECT rowid,sender_id,ciphertext FROM charoo_messages WHERE rowid>? AND attachment_id IS NULL ORDER BY rowid LIMIT 50",
+        after,
+      );
+      if (!rows.length) break;
+      after = rows.at(-1)!.rowid;
+      for (const row of rows) {
+        const sender = progress.get(row.sender_id);
+        if (!sender || sender.words >= QUICK_CHAT_DISCLOSURE_WORDS) continue;
+        const text = await decrypt(
+          row.ciphertext,
+          this.env.MESSAGE_KEY,
+          roomId,
+        );
+        const words = disclosureWords(text);
+        if (!words) continue;
+        const fp = `words:${await fingerprint(text, this.env.MESSAGE_KEY, roomId)}`;
+        if (sender.fingerprints.has(fp)) continue;
+        sender.fingerprints.add(fp);
+        sender.words = Math.min(
+          QUICK_CHAT_DISCLOSURE_WORDS,
+          sender.words + words,
+        );
+      }
+    }
+    this.ctx.storage.transactionSync(() => {
+      this.open();
+      for (const [id, { words, fingerprints }] of progress) {
+        const participant = this.participant(id);
+        if (!participant || participant.word_count !== undefined) continue;
+        for (const fp of fingerprints) this.saveWordFingerprint(id, fp);
+        this.saveParticipant({ ...participant, word_count: words });
+      }
+    });
+  }
+  private saveWordFingerprint(userId: string, fp: string) {
+    return (
+      this.ctx.storage.sql
+        .exec(
+          "INSERT INTO charoo_fingerprints(user_id,fingerprint) VALUES(?,?) ON CONFLICT DO NOTHING RETURNING fingerprint",
+          userId,
+          fp,
+        )
+        .toArray().length > 0
     );
   }
   private syncAsl() {
     const r = this.meta();
-    const eligible = this.disclosureEligible(5);
+    const eligible = this.disclosureEligible();
     if (r.type === "STRANGER" && r.asl_revealed !== eligible) {
       this.ctx.storage.transactionSync(() => {
         r.asl_revealed = eligible;
@@ -232,11 +321,10 @@ export class Room extends DurableObject<Env> {
     }
     return false;
   }
-  private async pictureSharing(actor: Actor) {
+  private async pictureSharing(actor: Actor, eligible: boolean) {
     const self = this.participant(actor.userId)!,
       picture = await currentPicture(this.env, actor.userId);
     const participants: { id: string; url: string }[] = [];
-    const eligible = this.disclosureEligible(10);
     if (eligible)
       for (const p of this.people()) {
         if (p.picture_decision !== "approved" || !p.picture_id) continue;
@@ -564,6 +652,14 @@ export class Room extends DurableObject<Env> {
         "attachment.scan.abort",
       ].includes(kind);
       const room = await this.permit(actor, write);
+      if (
+        room.type === "STRANGER" &&
+        ["snapshot", "message", "picture.share", "picture.download"].includes(
+          kind,
+        )
+      ) {
+        await this.ensureDisclosureWordCounts(room.id);
+      }
       switch (kind) {
         case "snapshot":
           if (this.syncAsl()) {
@@ -574,7 +670,7 @@ export class Room extends DurableObject<Env> {
         case "picture.share": {
           const b = pictureSharingDecisionSchema.parse(input);
           requireThat(
-            this.disclosureEligible(10),
+            this.disclosureEligible(),
             409,
             "Picture sharing is not available yet",
           );
@@ -589,7 +685,7 @@ export class Room extends DurableObject<Env> {
           this.ctx.storage.transactionSync(() => {
             this.membership(u.id);
             requireThat(
-              this.disclosureEligible(10),
+              this.disclosureEligible(),
               409,
               "Picture sharing is not available yet",
             );
@@ -618,7 +714,7 @@ export class Room extends DurableObject<Env> {
           return this.snapshot(actor);
         }
         case "picture.download": {
-          requireThat(this.disclosureEligible(10), 404, "Picture unavailable");
+          requireThat(this.disclosureEligible(), 404, "Picture unavailable");
           const p = this.participant(input.userId);
           requireThat(
             p?.state === "JOINED" &&
@@ -660,8 +756,17 @@ export class Room extends DurableObject<Env> {
         }
         case "message": {
           const b = messageSchema.parse(input),
-            sealed = await encrypt(b.text, env.MESSAGE_KEY, room.id),
-            fp = await fingerprint(b.text, env.MESSAGE_KEY, room.id);
+            sealed = await encrypt(b.text, env.MESSAGE_KEY, room.id);
+          const words =
+            room.type === "STRANGER" &&
+            !b.attachmentId &&
+            (this.participant(u.id)?.word_count ?? 0) <
+              QUICK_CHAT_DISCLOSURE_WORDS
+              ? disclosureWords(b.text)
+              : 0;
+          const fp = words
+            ? `words:${await fingerprint(b.text, env.MESSAGE_KEY, room.id)}`
+            : null;
           const outcome = this.ctx.storage.transactionSync(() => {
             const r = this.membership(u.id, true);
             const old = this.rows(
@@ -707,26 +812,20 @@ export class Room extends DurableObject<Env> {
               at,
             );
             if (
-              meaningful(b.text, p.last_qualifying_at) &&
-              !this.rows(
-                "SELECT 1 FROM charoo_fingerprints WHERE user_id=? AND fingerprint=?",
-                u.id,
-                fp,
-              ).length
+              fp &&
+              (p.word_count ?? 0) < QUICK_CHAT_DISCLOSURE_WORDS &&
+              this.saveWordFingerprint(u.id, fp)
             ) {
-              this.ctx.storage.sql.exec(
-                "INSERT INTO charoo_fingerprints(user_id,fingerprint) VALUES(?,?)",
-                u.id,
-                fp,
+              p.word_count = Math.min(
+                QUICK_CHAT_DISCLOSURE_WORDS,
+                (p.word_count ?? 0) + words,
               );
-              p.meaningful_count++;
-              p.last_qualifying_at = at;
             }
             p.last_message_at = at;
             this.saveParticipant(p);
             r.last_activity = at;
             if (r.type === "STRANGER")
-              r.asl_revealed = this.disclosureEligible(5);
+              r.asl_revealed = this.disclosureEligible();
             this.save(r);
             this.changed();
             this.event("message", { id });
@@ -1261,6 +1360,7 @@ export class Room extends DurableObject<Env> {
   }
   private async snapshot(actor: Actor) {
     const r = await this.permit(actor),
+      aslRevealed = r.type === "STRANGER" && this.disclosureEligible(),
       people = this.people()
         .filter((p) => p.state === "JOINED")
         .sort((a, b) => a.joined_at.localeCompare(b.joined_at))
@@ -1301,7 +1401,7 @@ export class Room extends DurableObject<Env> {
             ? p.muted_until
             : null,
         asl:
-          (r.type !== "STRANGER" || r.asl_revealed) && visible
+          (r.type !== "STRANGER" || aslRevealed) && visible
             ? {
                 age: u.profile.age,
                 gender: u.profile.gender,
@@ -1338,10 +1438,13 @@ export class Room extends DurableObject<Env> {
       }
     }
     const pictureSharing =
-      r.type === "STRANGER" ? await this.pictureSharing(actor) : undefined;
+      r.type === "STRANGER"
+        ? await this.pictureSharing(actor, aslRevealed)
+        : undefined;
     await this.permit(actor);
     return {
       ...safe,
+      ...(r.type === "STRANGER" ? { asl_revealed: aslRevealed } : {}),
       pictureSharing,
       shareUrl: isHost ? await this.inviteUrl() : undefined,
       online: this.people().filter(
@@ -1354,7 +1457,7 @@ export class Room extends DurableObject<Env> {
       participants: profiles,
       aslProgress: people.map((p) => ({
         id: p.user_id,
-        count: p.meaningful_count,
+        count: p.word_count ?? 0,
       })),
       pendingJoinCount: pendingRequests.length,
       joinRequests,

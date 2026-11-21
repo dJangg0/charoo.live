@@ -29,9 +29,9 @@ A focused source review and isolated local reproductions found the following ope
 
 | Finding                                          | Priority/status            | Incorrect behavior or implementation gap                                                                             | Requirements        |
 | ------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| [IMP-01](./docs/IMPLEMENTATION_REVIEW.md#imp-01) | P1 / confirmed             | An old pending approval grants room read/write access after either party blocks the other.                           | FR-04, FR-07, BE-01 |
-| [IMP-02](./docs/IMPLEMENTATION_REVIEW.md#imp-02) | P1 / conditional video     | LiveKit deletion uses the wrong permission, so server-side call termination remains pending.                         | FR-09, BE-03, BE-06 |
-| [IMP-03](./docs/IMPLEMENTATION_REVIEW.md#imp-03) | P2 / confirmed             | An unrelated authenticated user with the room UUID can read its private title through join-status.                   | FR-04, FR-07, BE-01 |
+| [IMP-01](./docs/IMPLEMENTATION_REVIEW.md#imp-01) | P1 / fixed in source 2026-11-22, verification pending             | An old pending approval grants room read/write access after either party blocks the other.                           | FR-04, FR-07, BE-01 |
+| [IMP-02](./docs/IMPLEMENTATION_REVIEW.md#imp-02) | P1 / conditional video; fixed in source 2026-11-22, verification pending     | LiveKit deletion uses the wrong permission, so server-side call termination remains pending.                         | FR-09, BE-03, BE-06 |
+| [IMP-03](./docs/IMPLEMENTATION_REVIEW.md#imp-03) | P2 / fixed in source 2026-11-22, verification pending             | An unrelated authenticated user with the room UUID can read its private title through join-status.                   | FR-04, FR-07, BE-01 |
 | [IMP-04](./docs/IMPLEMENTATION_REVIEW.md#imp-04) | P2 / confirmed             | Stale indexed creator IDs prevent expired guest creators from being deleted after room purge.                        | FR-10, BE-02        |
 | [IMP-05](./docs/IMPLEMENTATION_REVIEW.md#imp-05) | P2 / confirmed             | A delayed room-open response overrides a newer room selection.                                                       | FR-11               |
 | [IMP-06](./docs/IMPLEMENTATION_REVIEW.md#imp-06) | P2 / confirmed             | A delayed pagination response inserts one room's messages into another room's display.                               | FR-05, FR-11        |
@@ -41,6 +41,8 @@ A focused source review and isolated local reproductions found the following ope
 | [IMP-11](./docs/IMPLEMENTATION_REVIEW.md#imp-11) | P2 / previously observed   | Clean workerd development auto-migration fails on multiline D1 SQL; not rerun in this review.                        | BE-07, AD-04        |
 
 The existing 72-test suite passed. The new local reproductions confirm failures it does not cover. These results do not establish production exploit activity or a complete audit. Provider behavior was checked with a local contract-validating substitute, not a real provider account.
+
+**Source fixes, 2026-11-22:** IMP-01, IMP-02 and IMP-03 are fixed in source and covered by regression tests (see [docs/IMPLEMENTATION_REVIEW.md](./docs/IMPLEMENTATION_REVIEW.md)). Native, browser and deployed runtime checks have not run, so the `[ISSUE]` markers stay until they pass. **OPEN QUESTION:** shared-room access follows the host's blocks only, matching the join path. Blocks between two ordinary members do not change shared-room access. Confirm this product rule before extending it.
 
 ## Functional requirements
 

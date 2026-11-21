@@ -18,6 +18,8 @@ Cause: [join approval](../celld/durable-objects/room.ts#L790) promotes the reque
 
 **Evidence:** isolated HTTP/SQLite tests covered both block directions: fresh join 403, old-request approval 200, history 200, send 201. Direction to review: revalidate current requester eligibility at approval and define consistent ongoing access rules. Do not remove protection for legitimate pending applicants.
 
+**Fix (2026-11-22, source):** `join_respond` refuses approval while a block exists between the host and the requester, in either direction (403). `authorize()` now denies a non-host member of a shared room when a block exists between them and the host, in either direction. That also covers live delivery and socket upgrades. Regression tests in `tests/domain.test.ts` (approval after a block; a block after approval) fail on the original code. Blocks between two ordinary members are unchanged. Native, browser and deployed checks not run.
+
 ## IMP-02
 
 **P1, conditional on video — Provider call termination has the wrong grant.** Requirements: FR-09, BE-03, BE-06.
@@ -28,6 +30,8 @@ Cause: [join approval](../celld/durable-objects/room.ts#L790) promotes the reque
 
 Direction to review: use the documented management permission and test actual management-token grants, not only mocked HTTP statuses.
 
+**Fix (2026-11-22, source):** `endCall` signs `DeleteRoom` with `roomCreate`, which LiveKit documents as the permission to create or delete rooms, and drops `roomAdmin`. The native LiveKit fixture now requires `roomCreate`, and `tests/cloudflare-fetch.test.ts` decodes the signed token to assert the grant. Not run against a live LiveKit server.
+
 ## IMP-03
 
 **P2 — Join-status discloses a private room title to an unrelated user.** Requirements: FR-04, FR-07, BE-01.
@@ -35,6 +39,8 @@ Direction to review: use the documented management permission and test actual ma
 An authenticated outsider who knows a shared room's UUID can call [the join-status route](../celld/features/rooms/routes.ts#L156) without membership, an invitation, or a prior request. [The NONE branch](../celld/durable-objects/room.ts#L463) returns its private title.
 
 **Evidence:** isolated HTTP requests returned 404 for the ordinary room snapshot but 200, `NONE`, and the title for join-status. Knowledge of the UUID is a prerequisite; this does not establish enumerable IDs or message access. Direction to review: return only justified status information to authorized members or actual applicants, with a minimal response for unrelated callers.
+
+**Fix (2026-11-22, source):** `join_status` returns `{ status: "NONE", roomId }` with no title for callers without a request. Applicants keep the title they receive with their pending status, and the frontend falls back to the title stored when the request was created. Regression test: `tests/domain.test.ts` (a stranger gets no title; the applicant still does).
 
 ## IMP-04
 

@@ -412,6 +412,15 @@ export class Room extends DurableObject<Env> {
               403,
               "Conversation unavailable",
             );
+      // Shared rooms are host-governed: a block with the host ends access, as
+      // the join path already does. broadcast() and fetch() call authorize(),
+      // so live delivery and socket upgrades are covered too.
+      if (r.type === "SHARED_GROUP" && u.id !== r.creator_id)
+        requireThat(
+          !(await blocked(this.env, u.id, r.creator_id)),
+          403,
+          "Room unavailable",
+        );
       if (["STRANGER", "PRIVATE"].includes(r.type))
         requireThat(
           Date.parse(this.meta().last_activity) +
@@ -616,7 +625,9 @@ export class Room extends DurableObject<Env> {
             reason: p.removed_reason || null,
           };
         const mine = this.myJoinRequest(u.id);
-        if (!mine) return { status: "NONE", roomId: r.id, title: r.title };
+        // Strangers learn only that they have no request. Applicants keep the
+        // title they already received when their request was created.
+        if (!mine) return { status: "NONE", roomId: r.id };
         return {
           status: mine.status,
           roomId: r.id,
@@ -1036,6 +1047,14 @@ export class Room extends DurableObject<Env> {
               !reason || (reason.length >= 3 && reason.length <= 300),
               400,
               "Add a short reason (3-300 characters) or leave it empty",
+            );
+          // A block in either direction stops approval, even when the request
+          // was made before the block. authorize() also enforces it later.
+          if (accept)
+            requireThat(
+              !(await blocked(env, req.user_id, u.id)),
+              403,
+              "This request can’t be approved while one of you has blocked the other.",
             );
           this.ctx.storage.transactionSync(() => {
             this.membership(u.id);

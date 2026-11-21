@@ -950,4 +950,105 @@ describe("Durable authorities and coordination", () => {
       (await f.db.prepare("SELECT * FROM users").all()).results,
     ).toHaveLength(0);
   });
+  it("keeps a block in force for a request made before it", async () => {
+    const f = await fixture(),
+      host = await f.guest(),
+      visitor = await f.guest(),
+      created = unwrap(
+        await f.app.command(host.actor, "room.create", {
+          type: "SHARED_GROUP",
+          title: "Block scope",
+        }),
+      ),
+      room = roomStub(f.env, created.id),
+      tokenHash = await hash(new URL(created.shareUrl).hash.slice(6));
+    unwrap(await room.command(visitor.actor, "join", { tokenHash }));
+    const [pending] = unwrap(
+      await room.command(host.actor, "join_requests", {}),
+    );
+    unwrap(
+      await f.app.command(host.actor, "block", {
+        targetId: visitor.actor.userId,
+      }),
+    );
+    expect(
+      await room.command(host.actor, "join_respond", {
+        requestId: pending.id,
+        accept: true,
+      }),
+    ).toMatchObject({ ok: false, status: 403 });
+    expect(
+      unwrap(await room.command(visitor.actor, "join_status", {})),
+    ).toMatchObject({ status: "PENDING" });
+    // A pending requester is not a joined member, so reads stay denied as
+    // unavailable (404) and never reach the block check.
+    expect(await room.command(visitor.actor, "messages")).toMatchObject({
+      ok: false,
+      status: 404,
+    });
+  });
+  it("ends an approved member's shared-room access when the host blocks them", async () => {
+    const f = await fixture(),
+      host = await f.guest(),
+      member = await f.guest(),
+      created = unwrap(
+        await f.app.command(host.actor, "room.create", {
+          type: "SHARED_GROUP",
+          title: "Block after approval",
+        }),
+      ),
+      room = roomStub(f.env, created.id),
+      tokenHash = await hash(new URL(created.shareUrl).hash.slice(6));
+    unwrap(await room.command(member.actor, "join", { tokenHash }));
+    const [request] = unwrap(
+      await room.command(host.actor, "join_requests", {}),
+    );
+    unwrap(
+      await room.command(host.actor, "join_respond", {
+        requestId: request.id,
+        accept: true,
+      }),
+    );
+    expect(
+      unwrap(await room.command(member.actor, "messages")).messages,
+    ).toEqual([]);
+    unwrap(
+      await f.app.command(host.actor, "block", {
+        targetId: member.actor.userId,
+      }),
+    );
+    expect(await room.command(member.actor, "messages")).toMatchObject({
+      ok: false,
+      status: 403,
+    });
+    expect(
+      await room.command(member.actor, "message", {
+        text: "Still here?",
+        clientMessageId: crypto.randomUUID(),
+      }),
+    ).toMatchObject({ ok: false, status: 403 });
+    const hostPage = unwrap(await room.command(host.actor, "messages"));
+    expect(hostPage.messages).toEqual([]);
+  });
+  it("withholds the room title from join status for unrelated users", async () => {
+    const f = await fixture(),
+      host = await f.guest(),
+      applicant = await f.guest(),
+      stranger = await f.guest(),
+      created = unwrap(
+        await f.app.command(host.actor, "room.create", {
+          type: "SHARED_GROUP",
+          title: "Private title",
+        }),
+      ),
+      room = roomStub(f.env, created.id),
+      tokenHash = await hash(new URL(created.shareUrl).hash.slice(6));
+    expect(
+      unwrap(await room.command(stranger.actor, "join_status", {})),
+    ).toStrictEqual({ status: "NONE", roomId: created.id });
+    unwrap(await room.command(applicant.actor, "join", { tokenHash }));
+    expect(
+      unwrap(await room.command(applicant.actor, "join_status", {})),
+    ).toMatchObject({ status: "PENDING", title: "Private title" });
+  });
 });

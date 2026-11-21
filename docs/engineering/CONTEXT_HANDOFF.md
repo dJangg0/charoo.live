@@ -1,5 +1,14 @@
 # Charoo shared engineering handoff
 
+## Access-control fixes, 2026-11-22
+
+- Source: approval refuses a block in either direction (`celld/durable-objects/room.ts`). `authorize()` denies a non-host member of a shared room when a block exists between them and the host (either direction), which also covers REST, socket upgrade and live delivery. `join_status` omits the title for strangers. LiveKit `DeleteRoom` uses `roomCreate` (`celld/features/providers/livekit.ts`; fixture in `tests/native/providers.ts`).
+- Tests: four new regression tests in `tests/domain.test.ts` and `tests/cloudflare-fetch.test.ts`. All four fail on the original code and pass on the fix.
+- Decision to confirm with product: shared-room access follows the host's blocks only, matching the join path. Blocks between two ordinary members are unchanged.
+- PASS (local): `pnpm typecheck`; `pnpm test` (14 files, 125 tests). `prettier --check` still lists only the three files that already failed (`celld/durable-objects/app.ts`, `tests/domain.test.ts`, `tests/ports.test.ts`). The new lines are clean.
+- Not run: `pnpm test:native`, `pnpm test:browser`, Cloudflare dry runs, live LiveKit, deployed checks. The `[ISSUE]` markers in the SRS stay until those pass.
+- Checkpoint: `.context/handoffs/access-control-fixes-haiku.md`. Next: confirm the block-scope decision, run the native suite with the Celld CLI, then take IMP-04 to IMP-07.
+
 ## Quick-chat ASL in the left sidebar, 2026-11-20
 
 - After the existing ten-word-each gate, the left room sidebar shows only the other participant’s permitted ASL beneath their “Stranger” entry. Both participants get the same perspective-relative behavior. The viewer’s own ASL stays hidden in quick chat; picture consent remains in its own panel.

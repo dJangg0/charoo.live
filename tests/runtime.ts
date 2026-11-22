@@ -242,3 +242,49 @@ export async function fixture() {
     drain,
   };
 }
+
+// Quick-chat matching requires an approved profile picture. Domain fixture: HTTP upload validation is covered by profile-upload.test.ts.
+export async function addApprovedPicture(
+  f: Awaited<ReturnType<typeof fixture>>,
+  owner: { actor: Actor },
+  value = 7,
+) {
+  const picture = unwrap(
+    await f.app.command(owner.actor, "picture.init", {
+      mime: "image/png",
+      size: 12,
+    }),
+  );
+  const upload = unwrap(
+    await f.app.command(owner.actor, "picture.upload.begin", {
+      id: picture.id,
+    }),
+  );
+  await f.env.MEDIA.put(upload.object_key, new Uint8Array(12).fill(value), {
+    httpMetadata: { contentType: "image/png" },
+  });
+  unwrap(
+    await f.app.command(owner.actor, "picture.upload.finish", {
+      id: picture.id,
+      attempt: upload.attempt,
+    }),
+  );
+  unwrap(
+    await f.app.command(owner.actor, "picture.complete", {
+      id: picture.id,
+      attempt: upload.attempt,
+      key: upload.object_key,
+    }),
+  );
+  return { ...picture, bytes: new Uint8Array(12).fill(value) };
+}
+
+// A guest who can start a quick-chat search.
+export async function matchableGuest(
+  f: Awaited<ReturnType<typeof fixture>>,
+  verified = false,
+) {
+  const g = await f.guest(verified);
+  await addApprovedPicture(f, g);
+  return g;
+}

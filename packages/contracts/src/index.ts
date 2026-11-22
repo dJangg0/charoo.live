@@ -1,6 +1,11 @@
 import { z } from "zod";
 export const QUICK_CHAT_SEARCH_TIMEOUT_MS = 2 * 60 * 1000;
-export const QUICK_CHAT_DISCLOSURE_WORDS = 10;
+// Each participant's committed words in a quick chat unlock two milestones:
+// permitted ASL at ten words each, then profile-picture sharing at twenty.
+export const QUICK_CHAT_ASL_WORDS = 10;
+export const QUICK_CHAT_PICTURE_WORDS = 20;
+// Per-participant counts stop at the highest milestone.
+export const QUICK_CHAT_WORD_CAP = QUICK_CHAT_PICTURE_WORDS;
 export const roomTypes = [
   "AVAILABLE_TONIGHT",
   "SHARED_GROUP",
@@ -209,6 +214,23 @@ export const settingsSchema = z.object({
 export type Settings = typeof defaultSettings;
 export { z };
 
+// Group rooms let each member show their profile picture or one of these generated avatars.
+export const AVATAR_IDS = [
+  "sky",
+  "sun",
+  "mint",
+  "rose",
+  "violet",
+  "ember",
+  "slate",
+  "moss",
+] as const;
+export type AvatarId = (typeof AVATAR_IDS)[number];
+export const avatarChoiceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("picture") }),
+  z.object({ kind: z.literal("avatar"), id: z.enum(AVATAR_IDS) }),
+]);
+export type AvatarChoice = z.infer<typeof avatarChoiceSchema>;
 export const pictureSharingDecisionSchema = z.discriminatedUnion("decision", [
   z.object({ decision: z.literal("approved"), pictureId: z.string().uuid() }),
   z.object({ decision: z.literal("declined") }),

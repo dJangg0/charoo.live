@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPair, SignJWT, jwtVerify } from "jose";
-import { fixture } from "./runtime";
+import { fixture, matchableGuest } from "./runtime";
 import { unwrap } from "../celld/shared/errors";
 import { roomStub, iso } from "../celld/shared/data";
 import { bytes } from "../celld/shared/crypto";
@@ -170,8 +170,8 @@ describe("Worker provider adapters", () => {
   });
   it("requires call consent and durably retries provider termination", async () => {
     const f = await fixture(),
-      a = await f.guest(),
-      b = await f.guest(),
+      a = await matchableGuest(f),
+      b = await matchableGuest(f),
       matcher = f.matcher.getByName("charoo");
     await matcher.match(a.actor);
     const matched = unwrap(await matcher.match(b.actor));

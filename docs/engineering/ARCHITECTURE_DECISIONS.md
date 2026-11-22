@@ -35,7 +35,7 @@ These link to the existing baseline rather than granting new approval. For futur
 
 ## PD-01: Quick-chat disclosure requires balanced participation and owner consent
 
-- **Date/status:** 2026-11-12 / ACCEPTED product requirement from the specification request; subsequently implemented under the explicit implementation request. See ADR-01 below.
+- **Date/status:** 2026-11-12 / ACCEPTED product requirement from the specification request; subsequently implemented under the explicit implementation request. See ADR-01 below. **Milestones superseded 2026-11-22:** ASL unlocks at ten words from each participant and picture-sharing controls at twenty; see [FR-12](../../SRS.md#quick-chat-disclosure-milestones-fr-12).
 - **Problem:** A combined message total can imply mutual participation when one person sent most messages; a count milestone alone does not authorize revealing a profile picture.
 - **Decision:** [FR-12](../../SRS.md#quick-chat-disclosure-milestones-fr-12) requires five qualifying messages from **each** participant for permitted ASL, then ten from **each** for a notification to both and optional picture-sharing prompts. These are count-based milestones without the legacy room-age wait. Each owner independently approves their own picture; decline/dismissal leaves it hidden with a share-later chat notice and action. No existing picture means no actionable picture-sharing prompt.
 - **Alternatives ruled out by the request:** A pooled total does not establish each person's contribution. Automatic or forced reciprocal picture disclosure does not preserve independent owner consent.
@@ -45,7 +45,7 @@ These link to the existing baseline rather than granting new approval. For futur
 
 ## ADR-01: Private account pictures with room-scoped disclosure consent
 
-The 2026-11-20 word milestone supersedes the message counts and qualifying intervals described below. See [FR-12](../../SRS.md#quick-chat-disclosure-milestones-fr-12).
+The 2026-11-20 word milestone supersedes the message counts and qualifying intervals described below. The 2026-11-22 change splits that single ten-word gate: permitted ASL still unlocks at ten words each, and picture-sharing controls now unlock at twenty words each. Both gates keep each owner's consent independent. See [FR-12](../../SRS.md#quick-chat-disclosure-milestones-fr-12).
 
 - **Date/status:** 2026-11-12 / ACCEPTED for the original FR-12 implementation; its scanner prerequisite for profile photos was superseded by ADR-02. Verification is tracked in the implementation matrix.
 - **Problem:** Implement five-each ASL and ten-each voluntary picture sharing. The original profile has no picture storage; pictures must remain unavailable to a partner before their owner's approval, including through direct HTTP requests.
@@ -66,6 +66,14 @@ The 2026-11-20 word milestone supersedes the message counts and qualifying inter
 Historical profile-scanner implementation (superseded for profile photos by ADR-02): it used `redirect: "manual"` and rejected non-success responses, including redirects, before approval. Local workerd testing exposed that `redirect: "error"` fails before dispatch; this is documented by [Cloudflare Request runtime behavior](https://developers.cloudflare.com/workers/runtime-apis/request/). The initial feature change left other adapters unchanged; the subsequent Cloudflare readiness review corrected the same unsupported mode in all six remaining provider calls.
 
 Historical final readiness review applied current owner eligibility to ASL and froze scanner output with an atomic R2 create-only condition. Late scanner responses preserved an output already published by the same approved attempt; abandoned output underwent cleanup. This profile-scanner behavior is superseded by ADR-02. Regression/runtime evidence and remaining production findings are in [FR12_CLOUDFLARE_REVIEW.md](FR12_CLOUDFLARE_REVIEW.md).
+
+## ADR-04: Group members choose a room-scoped picture or generated avatar
+
+- **Date/status:** 2026-11-22 / ACCEPTED for the group join flow; verification is tracked in the implementation matrix.
+- **Problem:** Group rooms should not require a profile picture, but a member who has one should be able to show it. Quick chat keeps its picture requirement (FR-06, FR-12).
+- **Choice:** The member's join or approval choice is stored on the room participant or join request. A picture choice pins the owner's approved picture ID, and reads use the same private room-picture route as FR-12. A generated avatar needs no picture and exposes no image. Avatars are drawn in the app, not downloaded from third-party sources, so there are no licence or external-request concerns.
+- **Alternatives:** Downloaded avatar packs (rejected: licence and provenance uncertainty, and an external dependency). Showing every member's current picture (rejected: a picture change would be shown without consent). Making the choice changeable later (deferred: it would add a room command and UI).
+- **Consequences:** Replacing a picture retires the pinned one, so it stops being shown. Quick-chat consent and gates are unchanged.
 
 ## ADR-02: Keep the profile-upload fix inside the existing app
 

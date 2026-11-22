@@ -3,8 +3,12 @@ import {
   pictureById,
 } from "../features/profile-pictures/state";
 import {
+  avatarChoiceSchema,
   pictureSharingDecisionSchema,
-  QUICK_CHAT_DISCLOSURE_WORDS,
+  type AvatarId,
+  QUICK_CHAT_ASL_WORDS,
+  QUICK_CHAT_PICTURE_WORDS,
+  QUICK_CHAT_WORD_CAP,
 } from "@charoo/contracts";
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
@@ -36,6 +40,8 @@ type Participant = {
   joined_at: string;
   muted_until: string | null;
   word_count?: number;
+  // The cap word_count was computed under; counts stored under an older cap are recounted from history.
+  word_cap?: number;
   last_message_at: string | null;
   read_at: string | null;
   presence_until: number;
@@ -43,10 +49,17 @@ type Participant = {
   picture_id?: string;
   removed_reason?: string | null;
   removed_at?: string | null;
+  // Group rooms: the avatar the member chose on joining.
+  avatar?: AvatarRef;
 };
+type AvatarRef =
+  | { kind: "picture"; pictureId: string }
+  | { kind: "avatar"; id: AvatarId };
+const DEFAULT_AVATAR: AvatarId = "sky";
 type JoinRequest = {
   id: string;
   user_id: string;
+  avatar?: AvatarRef;
   status: "PENDING" | "APPROVED" | "REJECTED";
   reason?: string | null;
   created_at: string;
@@ -87,7 +100,7 @@ function disclosureWords(text: string) {
   let words = 0;
   for (const { segment, isWordLike } of wordSegmenter.segment(text)) {
     if (isWordLike && /\p{L}/u.test(segment)) words++;
-    if (words === QUICK_CHAT_DISCLOSURE_WORDS) break;
+    if (words === QUICK_CHAT_WORD_CAP) break;
   }
   return words;
 }
@@ -166,17 +179,51 @@ export class Room extends DurableObject<Env> {
       .filter((j) => j.user_id === userId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
   }
-  private add(id: string) {
+  private add(id: string, avatar?: AvatarRef) {
     this.saveParticipant({
       user_id: id,
       state: "JOINED",
       joined_at: iso(),
       muted_until: null,
       word_count: 0,
+      word_cap: QUICK_CHAT_WORD_CAP,
       last_message_at: null,
       read_at: null,
       presence_until: Date.now() + 90000,
+      ...(avatar ? { avatar } : {}),
     });
+  }
+  // A join-time choice. A picture choice pins the owner's current approved picture.
+  private async avatarRef(
+    env: Env,
+    userId: string,
+    choice: unknown,
+  ): Promise<AvatarRef> {
+    const parsed = avatarChoiceSchema.parse(
+      choice ?? { kind: "avatar", id: DEFAULT_AVATAR },
+    );
+    if (parsed.kind === "avatar") return { kind: "avatar", id: parsed.id };
+    const picture = await currentPicture(env, userId);
+    requireThat(picture, 409, "Add a profile picture or choose an avatar");
+    return { kind: "picture", pictureId: picture.id };
+  }
+  // What other members may see: the chosen avatar, or a picture only while it is still approved for its owner.
+  private async avatarView(p: Participant) {
+    const a = p.avatar;
+    if (!a) return { kind: "avatar" as const, id: DEFAULT_AVATAR };
+    if (a.kind === "avatar") return a;
+    try {
+      await user(this.env, p.user_id);
+    } catch {
+      return null;
+    }
+    const picture = await pictureById(this.env, a.pictureId);
+    if (picture?.state !== "APPROVED" || picture.owner_id !== p.user_id)
+      return null;
+    return {
+      kind: "picture" as const,
+      url: `/api/rooms/${this.meta().id}/pictures/${p.user_id}/content?pictureId=${picture.id}`,
+    };
   }
   private open(r = this.meta()) {
     requireThat(
@@ -222,20 +269,29 @@ export class Room extends DurableObject<Env> {
     this.save(r);
     this.outbox("projection", {});
   }
-  private disclosureEligible() {
+  private wordsEachAtLeast(threshold: number) {
     const people = this.people();
     return (
       this.meta().type === "STRANGER" &&
       people.length === 2 &&
       people.every(
-        (p) =>
-          p.state === "JOINED" &&
-          (p.word_count ?? 0) >= QUICK_CHAT_DISCLOSURE_WORDS,
+        (p) => p.state === "JOINED" && (p.word_count ?? 0) >= threshold,
       )
     );
   }
+  // ASL milestone: both participants have contributed ten words in this quick chat.
+  private aslEligible() {
+    return this.wordsEachAtLeast(QUICK_CHAT_ASL_WORDS);
+  }
+  // Picture milestone: both participants have contributed twenty words in this quick chat.
+  private pictureEligible() {
+    return this.wordsEachAtLeast(QUICK_CHAT_PICTURE_WORDS);
+  }
   private async ensureDisclosureWordCounts(roomId: string) {
-    const legacy = this.people().filter((p) => p.word_count === undefined);
+    // Counts stored before the current cap (ten-word cap, or no count) are recounted from history.
+    const legacy = this.people().filter(
+      (p) => p.word_cap !== QUICK_CHAT_WORD_CAP,
+    );
     if (!legacy.length) return;
     // Message writes in a legacy room wait for this same backfill before committing.
     this.disclosureUpgrade ??= this.backfillDisclosureWords(
@@ -254,9 +310,7 @@ export class Room extends DurableObject<Env> {
       ]),
     );
     let after = 0;
-    while (
-      [...progress.values()].some((p) => p.words < QUICK_CHAT_DISCLOSURE_WORDS)
-    ) {
+    while ([...progress.values()].some((p) => p.words < QUICK_CHAT_WORD_CAP)) {
       const rows = this.rows<{
         rowid: number;
         sender_id: string;
@@ -269,7 +323,7 @@ export class Room extends DurableObject<Env> {
       after = rows.at(-1)!.rowid;
       for (const row of rows) {
         const sender = progress.get(row.sender_id);
-        if (!sender || sender.words >= QUICK_CHAT_DISCLOSURE_WORDS) continue;
+        if (!sender || sender.words >= QUICK_CHAT_WORD_CAP) continue;
         const text = await decrypt(
           row.ciphertext,
           this.env.MESSAGE_KEY,
@@ -280,19 +334,21 @@ export class Room extends DurableObject<Env> {
         const fp = `words:${await fingerprint(text, this.env.MESSAGE_KEY, roomId)}`;
         if (sender.fingerprints.has(fp)) continue;
         sender.fingerprints.add(fp);
-        sender.words = Math.min(
-          QUICK_CHAT_DISCLOSURE_WORDS,
-          sender.words + words,
-        );
+        sender.words = Math.min(QUICK_CHAT_WORD_CAP, sender.words + words);
       }
     }
     this.ctx.storage.transactionSync(() => {
       this.open();
       for (const [id, { words, fingerprints }] of progress) {
         const participant = this.participant(id);
-        if (!participant || participant.word_count !== undefined) continue;
+        if (!participant || participant.word_cap === QUICK_CHAT_WORD_CAP)
+          continue;
         for (const fp of fingerprints) this.saveWordFingerprint(id, fp);
-        this.saveParticipant({ ...participant, word_count: words });
+        this.saveParticipant({
+          ...participant,
+          word_count: words,
+          word_cap: QUICK_CHAT_WORD_CAP,
+        });
       }
     });
   }
@@ -309,7 +365,7 @@ export class Room extends DurableObject<Env> {
   }
   private syncAsl() {
     const r = this.meta();
-    const eligible = this.disclosureEligible();
+    const eligible = this.aslEligible();
     if (r.type === "STRANGER" && r.asl_revealed !== eligible) {
       this.ctx.storage.transactionSync(() => {
         r.asl_revealed = eligible;
@@ -517,6 +573,12 @@ export class Room extends DurableObject<Env> {
         );
         // Public rooms join immediately. Link rooms knock first.
         if (r.type === "AVAILABLE_TONIGHT") {
+          // Joined and removed members do not choose again, so their input is not validated.
+          const before = this.participant(u.id);
+          const avatar =
+            before?.state === "JOINED" || before?.state === "REMOVED"
+              ? undefined
+              : await this.avatarRef(env, u.id, input.avatar);
           this.ctx.storage.transactionSync(() => {
             this.open();
             const p = this.participant(u.id);
@@ -528,10 +590,12 @@ export class Room extends DurableObject<Env> {
                 : "You were removed from this room",
             );
             if (p) {
+              // Only a member coming back from LEFT takes the new choice; a joined member keeps theirs.
+              if (p.state !== "JOINED" && avatar) p.avatar = avatar;
               p.state = "JOINED";
               p.presence_until = Date.now() + 90000;
               this.saveParticipant(p);
-            } else this.add(u.id);
+            } else this.add(u.id, avatar);
             this.changed();
             this.event("room.changed");
           });
@@ -552,11 +616,13 @@ export class Room extends DurableObject<Env> {
           );
         if (existing?.state === "JOINED") return { id: r.id };
         if (existing?.state === "LEFT") {
+          const avatar = await this.avatarRef(env, u.id, input.avatar);
           this.ctx.storage.transactionSync(() => {
             this.open();
             const p = this.participant(u.id)!;
             p.state = "JOINED";
             p.presence_until = Date.now() + 90000;
+            p.avatar = avatar;
             this.saveParticipant(p);
             this.changed();
             this.event("room.changed");
@@ -576,7 +642,7 @@ export class Room extends DurableObject<Env> {
         if (mine?.status === "APPROVED") {
           this.ctx.storage.transactionSync(() => {
             this.open();
-            this.add(u.id);
+            this.add(u.id, mine.avatar);
             this.changed();
             this.event("room.changed");
           });
@@ -584,6 +650,7 @@ export class Room extends DurableObject<Env> {
           await this.flush();
           return { id: r.id };
         }
+        const avatar = await this.avatarRef(env, u.id, input.avatar);
         const created = this.ctx.storage.transactionSync(() => {
           this.open();
           // One active record per visitor: a new knock after a decision
@@ -592,6 +659,7 @@ export class Room extends DurableObject<Env> {
           const req: JoinRequest = {
             id: previous?.id || crypto.randomUUID(),
             user_id: u.id,
+            avatar,
             status: "PENDING",
             created_at: iso(),
           };
@@ -681,7 +749,7 @@ export class Room extends DurableObject<Env> {
         case "picture.share": {
           const b = pictureSharingDecisionSchema.parse(input);
           requireThat(
-            this.disclosureEligible(),
+            this.pictureEligible(),
             409,
             "Picture sharing is not available yet",
           );
@@ -696,7 +764,7 @@ export class Room extends DurableObject<Env> {
           this.ctx.storage.transactionSync(() => {
             this.membership(u.id);
             requireThat(
-              this.disclosureEligible(),
+              this.pictureEligible(),
               409,
               "Picture sharing is not available yet",
             );
@@ -725,17 +793,29 @@ export class Room extends DurableObject<Env> {
           return this.snapshot(actor);
         }
         case "picture.download": {
-          requireThat(this.disclosureEligible(), 404, "Picture unavailable");
-          const p = this.participant(input.userId);
+          // Quick chat: owner consent after the picture milestone. Group rooms:
+          // the picture the member pinned when joining.
+          const quick = this.meta().type === "STRANGER";
           requireThat(
-            p?.state === "JOINED" &&
-              p.picture_decision === "approved" &&
-              p.picture_id,
+            quick ? this.pictureEligible() : true,
+            404,
+            "Picture unavailable",
+          );
+          const p = this.participant(input.userId);
+          const pictureId = quick
+            ? p?.picture_decision === "approved"
+              ? p.picture_id
+              : undefined
+            : p?.avatar?.kind === "picture"
+              ? p.avatar.pictureId
+              : undefined;
+          requireThat(
+            p?.state === "JOINED" && pictureId,
             404,
             "Picture unavailable",
           );
           await user(env, p.user_id);
-          const picture = await pictureById(env, p.picture_id);
+          const picture = await pictureById(env, pictureId);
           requireThat(
             picture?.state === "APPROVED" && picture.owner_id === p.user_id,
             404,
@@ -771,8 +851,7 @@ export class Room extends DurableObject<Env> {
           const words =
             room.type === "STRANGER" &&
             !b.attachmentId &&
-            (this.participant(u.id)?.word_count ?? 0) <
-              QUICK_CHAT_DISCLOSURE_WORDS
+            (this.participant(u.id)?.word_count ?? 0) < QUICK_CHAT_WORD_CAP
               ? disclosureWords(b.text)
               : 0;
           const fp = words
@@ -824,19 +903,18 @@ export class Room extends DurableObject<Env> {
             );
             if (
               fp &&
-              (p.word_count ?? 0) < QUICK_CHAT_DISCLOSURE_WORDS &&
+              (p.word_count ?? 0) < QUICK_CHAT_WORD_CAP &&
               this.saveWordFingerprint(u.id, fp)
             ) {
               p.word_count = Math.min(
-                QUICK_CHAT_DISCLOSURE_WORDS,
+                QUICK_CHAT_WORD_CAP,
                 (p.word_count ?? 0) + words,
               );
             }
             p.last_message_at = at;
             this.saveParticipant(p);
             r.last_activity = at;
-            if (r.type === "STRANGER")
-              r.asl_revealed = this.disclosureEligible();
+            if (r.type === "STRANGER") r.asl_revealed = this.aslEligible();
             this.save(r);
             this.changed();
             this.event("message", { id });
@@ -1064,10 +1142,11 @@ export class Room extends DurableObject<Env> {
             this.saveJoinRequest(req);
             if (accept) {
               const p = this.participant(req.user_id);
-              if (!p) this.add(req.user_id);
+              if (!p) this.add(req.user_id, req.avatar);
               else if (p.state !== "REMOVED") {
                 p.state = "JOINED";
                 p.presence_until = Date.now() + 90000;
+                p.avatar = req.avatar ?? p.avatar;
                 this.saveParticipant(p);
               } else
                 requireThat(false, 403, "That user was removed from this room");
@@ -1379,7 +1458,7 @@ export class Room extends DurableObject<Env> {
   }
   private async snapshot(actor: Actor) {
     const r = await this.permit(actor),
-      aslRevealed = r.type === "STRANGER" && this.disclosureEligible(),
+      aslRevealed = r.type === "STRANGER" && this.aslEligible(),
       people = this.people()
         .filter((p) => p.state === "JOINED")
         .sort((a, b) => a.joined_at.localeCompare(b.joined_at))
@@ -1413,6 +1492,7 @@ export class Room extends DurableObject<Env> {
       profiles.push({
         id: u.id,
         name: r.type === "STRANGER" ? "Stranger" : u.display_name,
+        ...(r.type === "STRANGER" ? {} : { avatar: await this.avatarView(p) }),
         verified: !!u.verified,
         online: p.presence_until > Date.now(),
         mutedUntil:
@@ -1458,7 +1538,7 @@ export class Room extends DurableObject<Env> {
     }
     const pictureSharing =
       r.type === "STRANGER"
-        ? await this.pictureSharing(actor, aslRevealed)
+        ? await this.pictureSharing(actor, this.pictureEligible())
         : undefined;
     await this.permit(actor);
     return {

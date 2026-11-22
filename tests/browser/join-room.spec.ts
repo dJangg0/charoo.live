@@ -179,10 +179,25 @@ test("mobile guests can join from a pasted invitation URL", async ({
       },
     });
   });
+  let joinedAvatar: unknown;
   await page.route("**/api/shared/join", (route) => {
-    joinedToken = route.request().postDataJSON().token;
+    const body = route.request().postDataJSON();
+    joinedToken = body.token;
+    joinedAvatar = body.avatar;
     return route.fulfill({ json: { id: visualIds.group } });
   });
+  await page.route("**/api/me/profile", (route) =>
+    route.fulfill({
+      json: {
+        id: visualIds.peer,
+        displayName: "Mobile friend",
+        verified: false,
+        role: "USER",
+        status: "Online",
+        profile: route.request().postDataJSON(),
+      },
+    }),
+  );
   await openJoin(page);
   await page
     .getByLabel("Room invitation URL", { exact: true })
@@ -199,10 +214,17 @@ test("mobile guests can join from a pasted invitation URL", async ({
   await page
     .getByRole("button", { name: "Continue as guest", exact: true })
     .click();
+  // Guests who arrive through an invitation also choose a picture or avatar before joining.
+  await expect(
+    page.getByRole("radio", { name: "Sun avatar", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("radio", { name: "Sun avatar", exact: true }).check();
+  await page.getByRole("button", { name: "Join room", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Coffee with friends", exact: true }),
   ).toBeVisible();
   expect(joinedToken).toBe(token);
+  expect(joinedAvatar).toEqual({ kind: "avatar", id: "sun" });
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -240,4 +262,35 @@ test("pasted invitations preserve host approval requirements", async ({
     "Request to join “Coffee with friends” is pending",
   );
   await expect(page.locator(".chat")).toHaveCount(0);
+});
+
+test("public room joins ask for a picture or avatar before joining", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await visualFixture(context);
+  const joins: unknown[] = [];
+  await page.route(`**/api/rooms/${visualIds.public}/join`, (route) => {
+    joins.push(route.request().postDataJSON());
+    return route.fulfill({ json: { id: visualIds.public } });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Discover rooms", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Join the conversation" })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "Join this conversation", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("radio", { name: "Rose avatar", exact: true }).check();
+  await page
+    .getByRole("button", { name: "Join conversation", exact: true })
+    .click();
+  await expect.poll(() => joins.length).toBe(1);
+  expect(joins[0]).toEqual({ avatar: { kind: "avatar", id: "rose" } });
 });

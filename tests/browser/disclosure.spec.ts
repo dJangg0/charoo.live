@@ -1,16 +1,21 @@
 import { expect, test, type Page } from "@playwright/test";
+import {
+  QUICK_CHAT_ASL_WORDS,
+  QUICK_CHAT_PICTURE_WORDS,
+} from "@charoo/contracts";
 import { visualFixture, visualIds } from "./visual-fixture";
 
 const roomUrl = `/api/rooms/${visualIds.group}`;
+// Defaults to a room past both milestones (ASL and picture sharing).
 function snapshot(options: { count?: number; hasPicture?: boolean } = {}) {
-  const count = options.count ?? 10;
+  const count = options.count ?? QUICK_CHAT_PICTURE_WORDS;
   return {
     id: visualIds.group,
     type: "STRANGER",
     title: "Quick chat",
     state: "OPEN",
     online: 2,
-    asl_revealed: count >= 10,
+    asl_revealed: count >= QUICK_CHAT_ASL_WORDS,
     participants: [
       { id: visualIds.user, name: "Stranger", verified: true, asl: null },
       {
@@ -18,7 +23,9 @@ function snapshot(options: { count?: number; hasPicture?: boolean } = {}) {
         name: "Stranger",
         verified: true,
         asl:
-          count >= 10 ? { age: 31, gender: "Woman", region: "Manila" } : null,
+          count >= QUICK_CHAT_ASL_WORDS
+            ? { age: 31, gender: "Woman", region: "Manila" }
+            : null,
       },
     ],
     aslProgress: [
@@ -26,7 +33,7 @@ function snapshot(options: { count?: number; hasPicture?: boolean } = {}) {
       { id: visualIds.peer, count },
     ],
     pictureSharing: {
-      eligible: count >= 10,
+      eligible: count >= QUICK_CHAT_PICTURE_WORDS,
       self: {
         hasPicture: options.hasPicture ?? true,
         decision: "pending" as "pending" | "declined" | "approved",
@@ -55,22 +62,24 @@ async function openQuickChat(page: Page) {
   await expect(page.locator(".chat")).toBeVisible();
 }
 
-test("word progress is shown and sharing appears only after ten words each", async ({
+test("ASL appears at ten words each and picture sharing only at twenty each", async ({
   page,
   context,
 }) => {
   await visualFixture(context);
-  const room = snapshot({ count: 9 });
-  room.aslProgress[1].count = 10;
+  const room = snapshot({ count: QUICK_CHAT_ASL_WORDS - 1 });
+  room.aslProgress[1].count = QUICK_CHAT_ASL_WORDS;
   await page.route("**/api/match", (route) =>
     route.fulfill({ json: { roomId: room.id } }),
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
   await openQuickChat(page);
   const progress = page.getByLabel("Quick chat progress", { exact: true });
-  await expect(progress).toContainText("10 words each to unlock sharing");
-  await expect(progress).toContainText(/You\s*9\/10/);
-  await expect(progress).toContainText(/Stranger\s*10\/10/);
+  await expect(progress).toContainText(
+    `${QUICK_CHAT_PICTURE_WORDS} words each to unlock picture sharing`,
+  );
+  await expect(progress).toContainText(/You\s*9\/20/);
+  await expect(progress).toContainText(/Stranger\s*10\/20/);
   await expect(page.getByRole("progressbar", { name: "You" })).toHaveAttribute(
     "aria-valuenow",
     "9",
@@ -79,15 +88,17 @@ test("word progress is shown and sharing appears only after ten words each", asy
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toHaveCount(0);
-  room.aslProgress[0].count = 10;
+
+  // Ten each reveals ASL in the sidebar; progress keeps counting toward twenty.
+  room.aslProgress[0].count = QUICK_CHAT_ASL_WORDS;
   room.asl_revealed = true;
-  room.pictureSharing.eligible = true;
   room.participants[1].asl = { age: 31, gender: "Woman", region: "Manila" };
   await page
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("A new hello for you");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(progress).toHaveCount(0);
+  await expect(progress).toContainText(/You\s*10\/20/);
+  await expect(progress).toContainText(/Stranger\s*10\/20/);
   const stranger = page
     .locator(".room-members .participant")
     .filter({ hasText: "Age 31 · Sex Woman · Location Manila" });
@@ -95,8 +106,23 @@ test("word progress is shown and sharing appears only after ten words each", asy
   await expect(stranger.locator(".member-profile")).toHaveText(
     "Age 31 · Sex Woman · Location Manila",
   );
+  await expect(page.locator(".quick-chat-disclosure")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Show my profile picture" }),
+  ).toHaveCount(0);
+
+  // Twenty each unlocks the picture milestone and hides the progress bars.
+  room.aslProgress[0].count = QUICK_CHAT_PICTURE_WORDS;
+  room.aslProgress[1].count = QUICK_CHAT_PICTURE_WORDS;
+  room.pictureSharing.eligible = true;
+  await page
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Twenty words in total for both of us");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(progress).toHaveCount(0);
   await expect(page.locator(".asl-disclosure-message")).toHaveCount(0);
   const sharing = page.getByLabel("Quick chat sharing", { exact: true });
+  await expect(sharing).toContainText("Picture sharing is now available.");
   await expect(
     page.getByRole("button", { name: "Show my profile picture" }),
   ).toBeVisible();

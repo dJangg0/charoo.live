@@ -214,6 +214,23 @@ export const settingsSchema = z.object({
 export type Settings = typeof defaultSettings;
 export { z };
 
+// Group rooms let each member show their profile picture or one of these generated avatars.
+export const AVATAR_IDS = [
+  "sky",
+  "sun",
+  "mint",
+  "rose",
+  "violet",
+  "ember",
+  "slate",
+  "moss",
+] as const;
+export type AvatarId = (typeof AVATAR_IDS)[number];
+export const avatarChoiceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("picture") }),
+  z.object({ kind: z.literal("avatar"), id: z.enum(AVATAR_IDS) }),
+]);
+export type AvatarChoice = z.infer<typeof avatarChoiceSchema>;
 export const pictureSharingDecisionSchema = z.discriminatedUnion("decision", [
   z.object({ decision: z.literal("approved"), pictureId: z.string().uuid() }),
   z.object({ decision: z.literal("declined") }),

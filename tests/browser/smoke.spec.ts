@@ -268,6 +268,13 @@ test("desktop guest creates an unlisted room, sends a message, and reloads the s
       .fill("Coffee guest");
     await guestPage.getByRole("checkbox").check();
     await guestPage.getByRole("button", { name: "Continue as guest" }).click();
+    // Group joins ask for a profile picture or generated avatar before the request is sent.
+    await expect(
+      guestPage.getByRole("dialog", { name: "Join this room", exact: true }),
+    ).toBeVisible();
+    await guestPage
+      .getByRole("button", { name: "Join room", exact: true })
+      .click();
     await expect(
       guestPage.getByText(/Request to join.*is pending/),
     ).toBeVisible();

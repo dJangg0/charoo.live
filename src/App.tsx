@@ -1,6 +1,7 @@
 import { Realtime } from "./realtime";
 import { RoomSidebar } from "./RoomSidebar";
 import { JoinRoomForm } from "./JoinRoomForm";
+import { AvatarChoicePicker } from "./AvatarChoice";
 import { ThemeSettings } from "./ThemeSettings";
 import { ProfilePicture } from "./ProfilePicture";
 import { QuickChatDisclosure, QuickChatProgress } from "./QuickChatDisclosure";
@@ -57,6 +58,7 @@ import {
   type Message,
   type Settings as AppSettings,
   type Profile,
+  type AvatarChoice,
 } from "@charoo/contracts";
 import { api, ApiError, setCsrf, getCsrf, randomUUID } from "./api";
 const VideoCall = lazy(() =>
@@ -259,6 +261,15 @@ export function App() {
     [joinProfilePending, setJoinProfilePending] = useState(() =>
       Boolean(new URLSearchParams(location.hash.slice(1)).get("room")),
     ),
+    [avatarChoice, setAvatarChoice] = useState<AvatarChoice>({
+      kind: "avatar",
+      id: "sky",
+    }),
+    [hasPicture, setHasPicture] = useState(false),
+    [publicJoin, setPublicJoin] = useState<{
+      roomId: string;
+      title: string;
+    } | null>(null),
     [toast, setToast] = useState(""),
     [error, setError] = useState(false),
     [search, setSearch] = useState(""),
@@ -664,7 +675,10 @@ export function App() {
     const t = new URLSearchParams(location.hash.slice(1)).get("room");
     if (t) {
       try {
-        const result = await api("/shared/join", "POST", { token: t });
+        const result = await api("/shared/join", "POST", {
+          token: t,
+          avatar: avatarChoice,
+        });
         if (result.pending) {
           setPendingJoin({
             roomId: result.roomId,
@@ -803,6 +817,22 @@ export function App() {
     window.addEventListener("beforeinstallprompt", listener);
     return () => window.removeEventListener("beforeinstallprompt", listener);
   }, []);
+  useEffect(() => {
+    if (modal !== "joinProfile" && modal !== "joinPublic") return;
+    let cancelled = false;
+    api("/profile/picture")
+      .then((r) => {
+        if (cancelled) return;
+        setHasPicture(Boolean(r.picture));
+        setAvatarChoice(r.picture ? { kind: "picture" } : { kind: "avatar", id: "sky" });
+      })
+      .catch(() => {
+        if (!cancelled) setHasPicture(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [modal]);
   useEffect(() => {
     const invitationChanged = () => {
       if (!new URLSearchParams(location.hash.slice(1)).get("room")) return;
@@ -1122,8 +1152,14 @@ export function App() {
       setCsrf(value.csrf);
       setUser(value.user);
       userRef.current = value.user;
-      setJoinProfilePending(false);
-      setModal(createAfterGuest && !hasRoomInvite ? "shared" : null);
+      setJoinProfilePending(hasRoomInvite);
+      setModal(
+        hasRoomInvite
+          ? "joinProfile"
+          : createAfterGuest
+            ? "shared"
+            : null,
+      );
       setCreateAfterGuest(false);
     });
   }
@@ -2030,13 +2066,10 @@ export function App() {
                         </div>
                         <button
                           className="join-button"
-                          onClick={() =>
-                            act(async () => {
-                              await api(`/rooms/${r.id}/join`, "POST", {});
-                              await openRoom(r.id);
-                              await loadSocial();
-                            })
-                          }
+                          onClick={() => {
+                            setPublicJoin({ roomId: r.id, title: r.title });
+                            setModal("joinPublic");
+                          }}
                         >
                           Join the conversation <ArrowUpRight size={18} />
                         </button>
@@ -3565,6 +3598,8 @@ export function App() {
                     ? "Sign in to Charoo"
                     : modal === "joinProfile"
                       ? "Join this room"
+                      : modal === "joinPublic"
+                        ? "Join this conversation"
                       : modal === "share"
                         ? "Your room is ready"
                         : modal === "invite"
@@ -3678,6 +3713,36 @@ export function App() {
                 Sign in with email instead
               </button>
             </form>
+          ) : modal === "joinPublic" ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!publicJoin) return;
+                const target = publicJoin;
+                void act(async () => {
+                  await api(`/rooms/${target.roomId}/join`, "POST", {
+                    avatar: avatarChoice,
+                  });
+                  setModal(null);
+                  setPublicJoin(null);
+                  await openRoom(target.roomId);
+                  await loadSocial();
+                });
+              }}
+            >
+              <p>
+                Choose how others see you in {publicJoin?.title || "this"}{" "}
+                conversation. You can still leave whenever you want.
+              </p>
+              <AvatarChoicePicker
+                value={avatarChoice}
+                onChange={setAvatarChoice}
+                hasPicture={hasPicture}
+              />
+              <button className="button" disabled={busy}>
+                Join conversation <ArrowRight size={16} />
+              </button>
+            </form>
           ) : modal === "joinProfile" ? (
             <form onSubmit={completeJoinProfile}>
               <p>
@@ -3685,6 +3750,11 @@ export function App() {
                 sex are optional and follow your profile visibility setting.
               </p>
               <JoinProfileFields profile={user?.profile} />
+              <AvatarChoicePicker
+                value={avatarChoice}
+                onChange={setAvatarChoice}
+                hasPicture={hasPicture}
+              />
               <button className="button" disabled={busy}>
                 Join room <ArrowRight size={16} />
               </button>

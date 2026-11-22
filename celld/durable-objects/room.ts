@@ -3,7 +3,9 @@ import {
   pictureById,
 } from "../features/profile-pictures/state";
 import {
+  avatarChoiceSchema,
   pictureSharingDecisionSchema,
+  type AvatarId,
   QUICK_CHAT_ASL_WORDS,
   QUICK_CHAT_PICTURE_WORDS,
   QUICK_CHAT_WORD_CAP,
@@ -47,10 +49,17 @@ type Participant = {
   picture_id?: string;
   removed_reason?: string | null;
   removed_at?: string | null;
+  // Group rooms: the avatar the member chose on joining.
+  avatar?: AvatarRef;
 };
+type AvatarRef =
+  | { kind: "picture"; pictureId: string }
+  | { kind: "avatar"; id: AvatarId };
+const DEFAULT_AVATAR: AvatarId = "sky";
 type JoinRequest = {
   id: string;
   user_id: string;
+  avatar?: AvatarRef;
   status: "PENDING" | "APPROVED" | "REJECTED";
   reason?: string | null;
   created_at: string;
@@ -170,7 +179,7 @@ export class Room extends DurableObject<Env> {
       .filter((j) => j.user_id === userId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
   }
-  private add(id: string) {
+  private add(id: string, avatar?: AvatarRef) {
     this.saveParticipant({
       user_id: id,
       state: "JOINED",
@@ -181,7 +190,40 @@ export class Room extends DurableObject<Env> {
       last_message_at: null,
       read_at: null,
       presence_until: Date.now() + 90000,
+      ...(avatar ? { avatar } : {}),
     });
+  }
+  // A join-time choice. A picture choice pins the owner's current approved picture.
+  private async avatarRef(
+    env: Env,
+    userId: string,
+    choice: unknown,
+  ): Promise<AvatarRef> {
+    const parsed = avatarChoiceSchema.parse(
+      choice ?? { kind: "avatar", id: DEFAULT_AVATAR },
+    );
+    if (parsed.kind === "avatar") return { kind: "avatar", id: parsed.id };
+    const picture = await currentPicture(env, userId);
+    requireThat(picture, 409, "Add a profile picture or choose an avatar");
+    return { kind: "picture", pictureId: picture.id };
+  }
+  // What other members may see: the chosen avatar, or a picture only while it is still approved for its owner.
+  private async avatarView(p: Participant) {
+    const a = p.avatar;
+    if (!a) return { kind: "avatar" as const, id: DEFAULT_AVATAR };
+    if (a.kind === "avatar") return a;
+    try {
+      await user(this.env, p.user_id);
+    } catch {
+      return null;
+    }
+    const picture = await pictureById(this.env, a.pictureId);
+    if (picture?.state !== "APPROVED" || picture.owner_id !== p.user_id)
+      return null;
+    return {
+      kind: "picture" as const,
+      url: `/api/rooms/${this.meta().id}/pictures/${p.user_id}/content?pictureId=${picture.id}`,
+    };
   }
   private open(r = this.meta()) {
     requireThat(
@@ -531,6 +573,12 @@ export class Room extends DurableObject<Env> {
         );
         // Public rooms join immediately. Link rooms knock first.
         if (r.type === "AVAILABLE_TONIGHT") {
+          // Joined and removed members do not choose again, so their input is not validated.
+          const before = this.participant(u.id);
+          const avatar =
+            before?.state === "JOINED" || before?.state === "REMOVED"
+              ? undefined
+              : await this.avatarRef(env, u.id, input.avatar);
           this.ctx.storage.transactionSync(() => {
             this.open();
             const p = this.participant(u.id);
@@ -542,10 +590,12 @@ export class Room extends DurableObject<Env> {
                 : "You were removed from this room",
             );
             if (p) {
+              // Only a member coming back from LEFT takes the new choice; a joined member keeps theirs.
+              if (p.state !== "JOINED" && avatar) p.avatar = avatar;
               p.state = "JOINED";
               p.presence_until = Date.now() + 90000;
               this.saveParticipant(p);
-            } else this.add(u.id);
+            } else this.add(u.id, avatar);
             this.changed();
             this.event("room.changed");
           });
@@ -566,11 +616,13 @@ export class Room extends DurableObject<Env> {
           );
         if (existing?.state === "JOINED") return { id: r.id };
         if (existing?.state === "LEFT") {
+          const avatar = await this.avatarRef(env, u.id, input.avatar);
           this.ctx.storage.transactionSync(() => {
             this.open();
             const p = this.participant(u.id)!;
             p.state = "JOINED";
             p.presence_until = Date.now() + 90000;
+            p.avatar = avatar;
             this.saveParticipant(p);
             this.changed();
             this.event("room.changed");
@@ -590,7 +642,7 @@ export class Room extends DurableObject<Env> {
         if (mine?.status === "APPROVED") {
           this.ctx.storage.transactionSync(() => {
             this.open();
-            this.add(u.id);
+            this.add(u.id, mine.avatar);
             this.changed();
             this.event("room.changed");
           });
@@ -598,6 +650,7 @@ export class Room extends DurableObject<Env> {
           await this.flush();
           return { id: r.id };
         }
+        const avatar = await this.avatarRef(env, u.id, input.avatar);
         const created = this.ctx.storage.transactionSync(() => {
           this.open();
           // One active record per visitor: a new knock after a decision
@@ -606,6 +659,7 @@ export class Room extends DurableObject<Env> {
           const req: JoinRequest = {
             id: previous?.id || crypto.randomUUID(),
             user_id: u.id,
+            avatar,
             status: "PENDING",
             created_at: iso(),
           };
@@ -739,17 +793,29 @@ export class Room extends DurableObject<Env> {
           return this.snapshot(actor);
         }
         case "picture.download": {
-          requireThat(this.pictureEligible(), 404, "Picture unavailable");
-          const p = this.participant(input.userId);
+          // Quick chat: owner consent after the picture milestone. Group rooms:
+          // the picture the member pinned when joining.
+          const quick = this.meta().type === "STRANGER";
           requireThat(
-            p?.state === "JOINED" &&
-              p.picture_decision === "approved" &&
-              p.picture_id,
+            quick ? this.pictureEligible() : true,
+            404,
+            "Picture unavailable",
+          );
+          const p = this.participant(input.userId);
+          const pictureId = quick
+            ? p?.picture_decision === "approved"
+              ? p.picture_id
+              : undefined
+            : p?.avatar?.kind === "picture"
+              ? p.avatar.pictureId
+              : undefined;
+          requireThat(
+            p?.state === "JOINED" && pictureId,
             404,
             "Picture unavailable",
           );
           await user(env, p.user_id);
-          const picture = await pictureById(env, p.picture_id);
+          const picture = await pictureById(env, pictureId);
           requireThat(
             picture?.state === "APPROVED" && picture.owner_id === p.user_id,
             404,
@@ -1076,10 +1142,11 @@ export class Room extends DurableObject<Env> {
             this.saveJoinRequest(req);
             if (accept) {
               const p = this.participant(req.user_id);
-              if (!p) this.add(req.user_id);
+              if (!p) this.add(req.user_id, req.avatar);
               else if (p.state !== "REMOVED") {
                 p.state = "JOINED";
                 p.presence_until = Date.now() + 90000;
+                p.avatar = req.avatar ?? p.avatar;
                 this.saveParticipant(p);
               } else
                 requireThat(false, 403, "That user was removed from this room");
@@ -1425,6 +1492,7 @@ export class Room extends DurableObject<Env> {
       profiles.push({
         id: u.id,
         name: r.type === "STRANGER" ? "Stranger" : u.display_name,
+        ...(r.type === "STRANGER" ? {} : { avatar: await this.avatarView(p) }),
         verified: !!u.verified,
         online: p.presence_until > Date.now(),
         mutedUntil:

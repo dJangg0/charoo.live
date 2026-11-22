@@ -67,6 +67,14 @@ Historical profile-scanner implementation (superseded for profile photos by ADR-
 
 Historical final readiness review applied current owner eligibility to ASL and froze scanner output with an atomic R2 create-only condition. Late scanner responses preserved an output already published by the same approved attempt; abandoned output underwent cleanup. This profile-scanner behavior is superseded by ADR-02. Regression/runtime evidence and remaining production findings are in [FR12_CLOUDFLARE_REVIEW.md](FR12_CLOUDFLARE_REVIEW.md).
 
+## ADR-04: Group members choose a room-scoped picture or generated avatar
+
+- **Date/status:** 2026-11-22 / ACCEPTED for the group join flow; verification is tracked in the implementation matrix.
+- **Problem:** Group rooms should not require a profile picture, but a member who has one should be able to show it. Quick chat keeps its picture requirement (FR-06, FR-12).
+- **Choice:** The member's join or approval choice is stored on the room participant or join request. A picture choice pins the owner's approved picture ID, and reads use the same private room-picture route as FR-12. A generated avatar needs no picture and exposes no image. Avatars are drawn in the app, not downloaded from third-party sources, so there are no licence or external-request concerns.
+- **Alternatives:** Downloaded avatar packs (rejected: licence and provenance uncertainty, and an external dependency). Showing every member's current picture (rejected: a picture change would be shown without consent). Making the choice changeable later (deferred: it would add a room command and UI).
+- **Consequences:** Replacing a picture retires the pinned one, so it stops being shown. Quick-chat consent and gates are unchanged.
+
 ## ADR-02: Keep the profile-upload fix inside the existing app
 
 - **Date/status:** 2026-11-17 / ACCEPTED under the user's explicit correction: profile-photo upload and original profile layout only; no new scanner service, moderation provider or unrelated attachment changes.

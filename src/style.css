@@ -5448,3 +5448,47 @@ canvas {
     width: 100%;
   }
 }
+
+/* Group join: avatar choice */
+.avatar-choice {
+  border: 0;
+  margin: 12px 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.avatar-choice legend {
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+.avatar-choice .avatar-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.avatar-choice .avatar-option.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.avatar-choice .avatar-option small {
+  color: var(--muted, inherit);
+}
+.avatar-choice .avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  justify-items: center;
+}
+.avatar-choice .avatar-grid .avatar-option {
+  flex-direction: column;
+}
+.avatar-choice .avatar-grid input {
+  accent-color: var(--accent);
+}
+.avatar-generated,
+.avatar-photo {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+}

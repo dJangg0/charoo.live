@@ -1,3 +1,4 @@
+import { Avatar, type MemberAvatar } from "./Avatar";
 import { useRef } from "react";
 import {
   Check,
@@ -24,6 +25,7 @@ interface Member {
   online?: boolean;
   mutedUntil?: string | null;
   asl: { age: number | null; gender: string; region: string } | null;
+  avatar?: MemberAvatar;
 }
 export interface JoinRequestItem {
   id: string;
@@ -256,7 +258,11 @@ export function RoomSidebar({
               aria-label={`Member ${member.name}`}
             >
               <div>
-                <span className="avatar">{member.name[0]}</span>
+                {room.type === "STRANGER" ? (
+                  <span className="avatar">{member.name[0]}</span>
+                ) : (
+                  <Avatar avatar={member.avatar} name={member.name} />
+                )}
                 <div className="member-identity">
                   <strong>
                     {member.name}
@@ -320,7 +326,11 @@ export function RoomSidebar({
                             onModerate(muted ? "UNMUTE" : "MUTE", member.id)
                           }
                         >
-                          {muted ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                          {muted ? (
+                            <Volume2 size={16} />
+                          ) : (
+                            <VolumeX size={16} />
+                          )}
                           {muted ? "Unmute" : "Mute for 30 min"}
                         </button>
                       )}

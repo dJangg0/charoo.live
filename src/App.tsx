@@ -2130,7 +2130,7 @@ export function App() {
                 <Shuffle size={50} />
               )}
               <span className="match-orb-label">
-                {queue ? "TAP TO CANCEL" : "TAP TO START"}
+                {queue ? "TAP TO CANCEL" : "START A CHAT"}
               </span>
             </button>
             <h2>

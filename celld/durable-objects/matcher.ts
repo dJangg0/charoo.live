@@ -15,6 +15,37 @@ import {
 } from "../shared/data";
 import { result, requireThat, unwrap, type Result } from "../shared/errors";
 import { QUICK_CHAT_SEARCH_TIMEOUT_MS } from "@charoo/contracts";
+import { currentPicture } from "../features/profile-pictures/state";
+// Male–male and female–female pairs wait this long for the earlier-queued participant.
+const SAME_SEX_WAIT_MS = 60_000;
+type MatchSex = "male" | "female" | "other";
+function sexOf(value: unknown): MatchSex | null {
+  const v = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return v === "male" || v === "female" || v === "other" ? v : null;
+}
+async function matchSex(env: Env, userId: string) {
+  const row = await first(env, "SELECT profile FROM users WHERE id=?", [
+    userId,
+  ]);
+  if (!row) return null;
+  try {
+    return sexOf(JSON.parse(row.profile).gender);
+  } catch {
+    return null;
+  }
+}
+// Unset genders and other–other pairs match at once; same-sex pairs wait
+// until the earlier-queued participant has waited SAME_SEX_WAIT_MS.
+function pairAllowed(
+  a: MatchSex | null,
+  b: MatchSex | null,
+  earliestQueuedAt: number,
+  now: number,
+) {
+  if (!a || !b) return true;
+  if (a === "other" || a !== b) return true;
+  return now - earliestQueuedAt >= SAME_SEX_WAIT_MS;
+}
 export class Matcher extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -88,6 +119,13 @@ export class Matcher extends DurableObject<Env> {
               u.id,
             ]);
         }
+        // Starting a new search needs an approved profile picture; an existing room above still returns.
+        requireThat(
+          (await currentPicture(env, u.id)) !== null,
+          403,
+          "Add a profile picture before starting a quick chat",
+        );
+        const self = await matchSex(env, u.id);
         const now = Date.now();
         const existingQueue = this.ctx.storage.sql
           .exec("SELECT queued_at FROM charoo_waiting WHERE user_id=?", u.id)
@@ -140,6 +178,16 @@ export class Matcher extends DurableObject<Env> {
             );
             continue;
           }
+          const earliestQueuedAt = Math.min(queuedAt, Number(row.queued_at));
+          if (
+            !pairAllowed(
+              self,
+              await matchSex(env, id),
+              earliestQueuedAt,
+              Date.now(),
+            )
+          )
+            continue;
           const expiresAt =
             Math.min(queuedAt, Number(row.queued_at)) +
             QUICK_CHAT_SEARCH_TIMEOUT_MS;

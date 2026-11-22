@@ -36,6 +36,36 @@ async function identity(browser: Browser, verified = false, role = "USER") {
   await api("/presence", "POST", { status: "Online" });
   return { context, session, api };
 }
+
+// Quick-chat matching requires an approved profile picture; upload through the real HTTP routes.
+const pngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAI0lEQVR4AYTIMQ0AAAwCwQYrNVYpdQ4rYeGTXw77Rx8TdRAAAAD//ztpTTIAAAAGSURBVAMA2psIEaykz3gAAAAASUVORK5CYII=";
+async function withPicture(who: Awaited<ReturnType<typeof identity>>) {
+  const png = Buffer.from(pngBase64, "base64");
+  const init = await who.api("/profile/picture/init", "POST", {
+    mime: "image/png",
+    size: png.length,
+  });
+  expect(init.status()).toBe(201);
+  const picture = await init.json();
+  const put = await who.context.request.put(`${base}${picture.url}`, {
+    headers: {
+      "Content-Type": "image/png",
+      Origin: base,
+      "X-CSRF-Token": who.session.csrf,
+    },
+    data: png,
+  });
+  if (!put.ok())
+    throw new Error(`picture upload ${put.status()}: ${await put.text()}`);
+  const complete = await who.api(
+    `/profile/picture/${picture.id}/complete`,
+    "POST",
+    {},
+  );
+  expect(complete.ok()).toBe(true);
+  return who;
+}
 async function group(
   u: Awaited<ReturnType<typeof identity>>,
   title = "Native group",
@@ -300,9 +330,9 @@ test("Google cancellation preserves browser binding, PKCE and invitation navigat
 test("concurrent room limits, matching, cancellation and contact acceptance", async ({
   browser,
 }) => {
-  const a = await identity(browser, true),
-    b = await identity(browser, true),
-    waiting = await identity(browser, true);
+  const a = await withPicture(await identity(browser, true)),
+    b = await withPicture(await identity(browser, true)),
+    waiting = await withPicture(await identity(browser, true));
   try {
     const creations = await Promise.all(
       Array.from({ length: 6 }, () =>
@@ -456,8 +486,8 @@ test("R2 quarantine, scanning retries, scoped URLs and authenticated downloads",
 test("call consent, AI privacy, reports, audited evidence and staff permissions", async ({
   browser,
 }) => {
-  const a = await identity(browser, true),
-    b = await identity(browser, true),
+  const a = await withPicture(await identity(browser, true)),
+    b = await withPicture(await identity(browser, true)),
     admin = await identity(browser, true, "ADMIN"),
     support = await identity(browser, true, "SUPPORT");
   try {

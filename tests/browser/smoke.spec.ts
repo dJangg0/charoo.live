@@ -411,6 +411,12 @@ test("desktop guest creates an unlisted room, sends a message, and reloads the s
     await expect(
       page.locator(".messages").getByText("I can chat again", { exact: true }),
     ).toBeVisible();
+    // Blocking closes the guest's open room (roomUnavailable -> closeActiveRoom), so the
+    // guest reopens it from the conversation list once access is restored.
+    await guestPage
+      .getByRole("button", { name: /^Browser test coffee room/ })
+      .first()
+      .click();
     await expect(
       guestPage
         .locator(".messages")

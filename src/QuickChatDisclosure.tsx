@@ -1,5 +1,5 @@
 import { Eye } from "lucide-react";
-import { QUICK_CHAT_DISCLOSURE_WORDS } from "@charoo/contracts";
+import { QUICK_CHAT_PICTURE_WORDS } from "@charoo/contracts";
 
 export interface PictureSharing {
   eligible: boolean;
@@ -31,12 +31,14 @@ export function QuickChatProgress({
     <section className="quick-chat-progress" aria-label="Quick chat progress">
       <div className="quick-chat-progress-heading">
         <strong>Chat progress</strong>
-        <span>{QUICK_CHAT_DISCLOSURE_WORDS} words each to unlock sharing</span>
+        <span>
+          {QUICK_CHAT_PICTURE_WORDS} words each to unlock picture sharing
+        </span>
       </div>
       <div className="quick-chat-progress-people">
         {people.map((person) => {
           const count = Math.min(
-            QUICK_CHAT_DISCLOSURE_WORDS,
+            QUICK_CHAT_PICTURE_WORDS,
             Math.max(
               0,
               progress.find((item) => item.id === person.id)?.count || 0,
@@ -47,7 +49,7 @@ export function QuickChatProgress({
               <div className="quick-chat-progress-label">
                 <span>{person.label}</span>
                 <span>
-                  {count}/{QUICK_CHAT_DISCLOSURE_WORDS}
+                  {count}/{QUICK_CHAT_PICTURE_WORDS}
                 </span>
               </div>
               <div
@@ -55,13 +57,13 @@ export function QuickChatProgress({
                 role="progressbar"
                 aria-label={person.label}
                 aria-valuemin={0}
-                aria-valuemax={QUICK_CHAT_DISCLOSURE_WORDS}
+                aria-valuemax={QUICK_CHAT_PICTURE_WORDS}
                 aria-valuenow={count}
-                aria-valuetext={`${count} of ${QUICK_CHAT_DISCLOSURE_WORDS} words`}
+                aria-valuetext={`${count} of ${QUICK_CHAT_PICTURE_WORDS} words`}
               >
                 <span
                   style={{
-                    width: `${(count / QUICK_CHAT_DISCLOSURE_WORDS) * 100}%`,
+                    width: `${(count / QUICK_CHAT_PICTURE_WORDS) * 100}%`,
                   }}
                 />
               </div>

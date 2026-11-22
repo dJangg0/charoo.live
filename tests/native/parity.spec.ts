@@ -343,8 +343,16 @@ test("concurrent room limits, matching, cancellation and contact acceptance", as
     await send(b, "J");
     const unlocked = await (await b.api(roomPath)).json();
     expect(unlocked.asl_revealed).toBe(true);
-    expect(unlocked.pictureSharing.eligible).toBe(true);
+    expect(unlocked.pictureSharing.eligible).toBe(false);
     expect(unlocked.pictureSharing.participants).toEqual([]);
+    // Ten more distinct words each reach the twenty-word picture milestone.
+    await send(
+      a,
+      "Eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty",
+    );
+    await send(b, "K L M N O P Q R S T");
+    const pictureReady = await (await b.api(roomPath)).json();
+    expect(pictureReady.pictureSharing.eligible).toBe(true);
     const request = await (
       await a.api("/requests", "POST", {
         kind: "CONTACT",

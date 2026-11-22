@@ -2742,12 +2742,14 @@ export function App() {
             </div>
             <div className="chat-layout">
               <div className="chat-main">
-                {active.type === "STRANGER" && user && !active.asl_revealed && (
-                  <QuickChatProgress
-                    userId={user.id}
-                    progress={active.aslProgress || []}
-                  />
-                )}
+                {active.type === "STRANGER" &&
+                  user &&
+                  !active.pictureSharing?.eligible && (
+                    <QuickChatProgress
+                      userId={user.id}
+                      progress={active.aslProgress || []}
+                    />
+                  )}
                 <div className="messages" aria-live="polite">
                   {messageNext && (
                     <button

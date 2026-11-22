@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  QUICK_CHAT_ASL_WORDS,
+  QUICK_CHAT_PICTURE_WORDS,
+} from "@charoo/contracts";
 import { app } from "../celld/http/app";
 import { iso, roomStub, type Actor } from "../celld/shared/data";
 import { unwrap } from "../celld/shared/errors";
-import { fixture } from "./runtime";
+import {
+  addApprovedPicture as addPicture,
+  fixture,
+  matchableGuest,
+} from "./runtime";
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 type Guest = Awaited<ReturnType<Fixture["guest"]>>;
@@ -18,8 +26,8 @@ afterEach(() => {
 
 async function quickChat() {
   const f = await fixture(),
-    a = await f.guest(),
-    b = await f.guest(),
+    a = await matchableGuest(f),
+    b = await matchableGuest(f),
     matcher = f.matcher.getByName("charoo");
   unwrap(await matcher.match(a.actor));
   const match = unwrap(await matcher.match(b.actor));
@@ -89,37 +97,6 @@ async function http(
   );
 }
 
-async function addPicture(f: Fixture, owner: Guest, value = 7) {
-  const picture = unwrap(
-    await f.app.command(owner.actor, "picture.init", {
-      mime: "image/png",
-      size: 12,
-    }),
-  );
-  const upload = unwrap(
-    await f.app.command(owner.actor, "picture.upload.begin", {
-      id: picture.id,
-    }),
-  );
-  await f.env.MEDIA.put(upload.object_key, new Uint8Array(12).fill(value), {
-    httpMetadata: { contentType: "image/png" },
-  });
-  unwrap(
-    await f.app.command(owner.actor, "picture.upload.finish", {
-      id: picture.id,
-      attempt: upload.attempt,
-    }),
-  );
-  // Domain fixture: HTTP validation is covered by profile-upload.test.ts.
-  unwrap(
-    await f.app.command(owner.actor, "picture.complete", {
-      id: picture.id,
-      attempt: upload.attempt,
-      key: upload.object_key,
-    }),
-  );
-  return { ...picture, bytes: new Uint8Array(12).fill(value) };
-}
 async function share(
   chat: Chat,
   owner: Guest,
@@ -135,19 +112,29 @@ async function share(
       : {}),
   });
 }
+async function makeAslEligible(chat: Chat) {
+  await send(chat, chat.a, QUICK_CHAT_ASL_WORDS);
+  await send(chat, chat.b, QUICK_CHAT_ASL_WORDS);
+}
+// Picture sharing is a later milestone than ASL; this reaches both.
 async function makeEligible(chat: Chat) {
-  await send(chat, chat.a, 10);
-  await send(chat, chat.b, 10);
+  await send(chat, chat.a, QUICK_CHAT_PICTURE_WORDS);
+  await send(chat, chat.b, QUICK_CHAT_PICTURE_WORDS);
 }
 
 describe("FR-12 quick-chat disclosure", () => {
+  it("keeps the two milestones at ten and twenty words", () => {
+    expect(QUICK_CHAT_ASL_WORDS).toBe(10);
+    expect(QUICK_CHAT_PICTURE_WORDS).toBe(20);
+  });
+
   it.each(["expired", "banned", "suspended"] as const)(
     "hides an unavailable owner's public ASL before cleanup (%s)",
     async (state) => {
       const chat = await quickChat();
       await setProfile(chat.f, chat.a.actor, "public");
       await setProfile(chat.f, chat.b.actor, "public");
-      await makeEligible(chat);
+      await makeAslEligible(chat);
       expect(
         (await snapshot(chat, chat.b)).participants.find(
           (p: any) => p.id === chat.a.actor.userId,
@@ -184,25 +171,78 @@ describe("FR-12 quick-chat disclosure", () => {
     [10, 0],
     [10, 9],
     [9, 10],
+  ])("keeps ASL hidden until both have ten words (%i/%i)", async (a, b) => {
+    const chat = await quickChat();
+    await setProfile(chat.f, chat.a.actor, "public");
+    await setProfile(chat.f, chat.b.actor, "public");
+    await send(chat, chat.a, a);
+    await send(chat, chat.b, b);
+    for (const viewer of [chat.a, chat.b]) {
+      const state = await snapshot(chat, viewer);
+      expect(state.asl_revealed).toBe(false);
+      expect(state.participants.every((p: any) => p.asl === null)).toBe(true);
+      expect(state.pictureSharing.eligible).toBe(false);
+      expect(state.pictureSharing.participants).toEqual([]);
+    }
+  });
+
+  it.each([
+    [20, 0],
+    [20, 19],
+    [19, 20],
   ])(
-    "keeps ASL and picture invitations hidden with %i/%i words",
+    "keeps picture sharing hidden until both have twenty words (%i/%i)",
     async (a, b) => {
       const chat = await quickChat();
-      await setProfile(chat.f, chat.a.actor, "public");
-      await setProfile(chat.f, chat.b.actor, "public");
+      await addPicture(chat.f, chat.a);
       await send(chat, chat.a, a);
       await send(chat, chat.b, b);
       for (const viewer of [chat.a, chat.b]) {
         const state = await snapshot(chat, viewer);
-        expect(state.asl_revealed).toBe(false);
-        expect(state.participants.every((p: any) => p.asl === null)).toBe(true);
         expect(state.pictureSharing.eligible).toBe(false);
         expect(state.pictureSharing.participants).toEqual([]);
       }
+      expect(await share(chat, chat.a, "approved")).toMatchObject({
+        ok: false,
+      });
     },
   );
 
-  it("unlocks permitted ASL and the photo invitation at ten words each without legacy gates", async () => {
+  it("shows ASL at ten words each, but the photo milestone only at twenty each", async () => {
+    const chat = await quickChat();
+    await addPicture(chat.f, chat.a);
+    await setProfile(chat.f, chat.a.actor, "public");
+    await setProfile(chat.f, chat.b.actor, "public");
+    await makeAslEligible(chat);
+    for (const viewer of [chat.a, chat.b]) {
+      const state = await snapshot(chat, viewer);
+      expect(state.asl_revealed).toBe(true);
+      expect(state.participants.every((p: any) => p.asl !== null)).toBe(true);
+      expect(state.pictureSharing).toMatchObject({
+        eligible: false,
+        participants: [],
+      });
+    }
+    expect(await share(chat, chat.a, "approved")).toMatchObject({ ok: false });
+
+    const gap = QUICK_CHAT_PICTURE_WORDS - QUICK_CHAT_ASL_WORDS;
+    await send(chat, chat.a, gap);
+    await send(chat, chat.b, gap);
+    for (const viewer of [chat.a, chat.b]) {
+      const state = await snapshot(chat, viewer);
+      expect(state.asl_revealed).toBe(true);
+      expect(state.pictureSharing).toMatchObject({
+        eligible: true,
+        participants: [],
+      });
+    }
+    expect((await snapshot(chat)).pictureSharing.self).toMatchObject({
+      hasPicture: true,
+      decision: "pending",
+    });
+  });
+
+  it("unlocks permitted ASL at ten words each without legacy gates", async () => {
     const chat = await quickChat();
     await setProfile(chat.f, chat.a.actor, "public");
     await setProfile(chat.f, chat.b.actor, "private");
@@ -235,8 +275,23 @@ describe("FR-12 quick-chat disclosure", () => {
       gender: "Woman",
       region: "Manila",
     });
-    expect(a.pictureSharing.eligible).toBe(true);
+    expect(a.pictureSharing.eligible).toBe(false);
     expect(a.pictureSharing.participants).toEqual([]);
+  });
+
+  it("caps each progress count at the picture milestone", async () => {
+    const chat = await quickChat();
+    const long = Array.from({ length: 25 }, (_, i) => `w${i}`).join(" ");
+    unwrap(
+      await chat.room.command(chat.a.actor, "message", {
+        text: long,
+        clientMessageId: crypto.randomUUID(),
+      }),
+    );
+    const a = (await snapshot(chat)).aslProgress.find(
+      (p: any) => p.id === chat.a.actor.userId,
+    );
+    expect(a.count).toBe(QUICK_CHAT_PICTURE_WORDS);
   });
 
   it("normalizes an old early ASL reveal and restores legacy progress from saved messages", async () => {
@@ -253,7 +308,7 @@ describe("FR-12 quick-chat disclosure", () => {
     // Older deployments could reveal after one each under lowered admin settings.
     meta.asl_revealed = true;
     state.database.exec(
-      "UPDATE charoo_participants SET data=json_remove(data,'$.word_count'); DELETE FROM charoo_fingerprints",
+      "UPDATE charoo_participants SET data=json_remove(data,'$.word_count','$.word_cap'); DELETE FROM charoo_fingerprints",
     );
     chat.room = chat.f.rooms.restart(`charoo:${chat.roomId}`);
     state.database
@@ -272,12 +327,68 @@ describe("FR-12 quick-chat disclosure", () => {
     expect(current.participants.every((p: any) => p.asl !== null)).toBe(true);
   });
 
-  it("rejects photo approval when one participant has twenty words and the other has nine", async () => {
+  it("restores legacy counts above ten from history and unlocks picture sharing only at twenty each", async () => {
+    const chat = await quickChat();
+    await setProfile(chat.f, chat.a.actor, "public");
+    await setProfile(chat.f, chat.b.actor, "public");
+    await send(chat, chat.a, 15);
+    await send(chat, chat.b, 15);
+    const state = chat.f.rooms.states.get(`charoo:${chat.roomId}`)!;
+    // Legacy rooms have no stored word counts or fingerprints; saved messages are the only source.
+    state.database.exec(
+      "UPDATE charoo_participants SET data=json_remove(data,'$.word_count','$.word_cap'); DELETE FROM charoo_fingerprints",
+    );
+    chat.room = chat.f.rooms.restart(`charoo:${chat.roomId}`);
+    for (const viewer of [chat.a, chat.b]) {
+      const current = await snapshot(chat, viewer);
+      expect(current.aslProgress.map((p: any) => p.count)).toEqual([15, 15]);
+      expect(current.asl_revealed).toBe(true);
+      expect(current.pictureSharing.eligible).toBe(false);
+    }
+    await send(chat, chat.a, 4);
+    await send(chat, chat.b, 4);
+    const current = await snapshot(chat);
+    expect(current.aslProgress.map((p: any) => p.count)).toEqual([19, 19]);
+    expect(current.pictureSharing.eligible).toBe(false);
+    await send(chat, chat.a, 1);
+    await send(chat, chat.b, 1);
+    const ready = await snapshot(chat);
+    expect(ready.aslProgress.map((p: any) => p.count)).toEqual([20, 20]);
+    expect(ready.pictureSharing.eligible).toBe(true);
+  });
+
+  it("recounts counts stored under the old ten-word cap from history before the twenty-word gate", async () => {
+    const chat = await quickChat();
+    await setProfile(chat.f, chat.a.actor, "public");
+    await setProfile(chat.f, chat.b.actor, "public");
+    await send(chat, chat.a, 15);
+    await send(chat, chat.b, 15);
+    const state = chat.f.rooms.states.get(`charoo:${chat.roomId}`)!;
+    // Rooms written under the old cap stored ten and carry no cap marker.
+    state.database.exec(
+      "UPDATE charoo_participants SET data=json_remove(json_set(data,'$.word_count',10),'$.word_cap')",
+    );
+    chat.room = chat.f.rooms.restart(`charoo:${chat.roomId}`);
+    const restored = await snapshot(chat);
+    expect(restored.aslProgress.map((p: any) => p.count)).toEqual([15, 15]);
+    await send(chat, chat.a, 1);
+    await send(chat, chat.b, 1);
+    const partial = await snapshot(chat);
+    expect(partial.aslProgress.map((p: any) => p.count)).toEqual([16, 16]);
+    expect(partial.pictureSharing.eligible).toBe(false);
+    await send(chat, chat.a, 4);
+    await send(chat, chat.b, 4);
+    const ready = await snapshot(chat);
+    expect(ready.aslProgress.map((p: any) => p.count)).toEqual([20, 20]);
+    expect(ready.pictureSharing.eligible).toBe(true);
+  });
+
+  it("rejects photo approval when one participant has twenty words and the other has nineteen", async () => {
     const chat = await quickChat();
     await send(chat, chat.a, 20);
-    await send(chat, chat.b, 9);
+    await send(chat, chat.b, 19);
     const state = await snapshot(chat);
-    expect(state.asl_revealed).toBe(false);
+    expect(state.asl_revealed).toBe(true);
     expect(state.pictureSharing.eligible).toBe(false);
     expect(
       await chat.room.command(chat.a.actor, "picture.share", {
@@ -379,8 +490,15 @@ describe("FR-12 quick-chat disclosure", () => {
     );
   });
 
-  it("notifies both at ten each when only one has a picture, without inventing a missing picture", async () => {
+  it("notifies both at twenty each when only one has a picture, without inventing a missing picture", async () => {
     const chat = await quickChat();
+    // Matching requires a picture, so b's picture is retired after matching.
+    await chat.f.db
+      .prepare(
+        "UPDATE profile_pictures SET state='REPLACED', data=json_set(data,'$.state','REPLACED') WHERE owner_id=?",
+      )
+      .bind(chat.b.actor.userId)
+      .run();
     await addPicture(chat.f, chat.a);
     await makeEligible(chat);
     expect((await snapshot(chat)).pictureSharing).toMatchObject({
@@ -475,7 +593,7 @@ describe("FR-12 quick-chat disclosure", () => {
         400,
       );
       if (revocation === "leave") {
-        const c = await chat.f.guest();
+        const c = await matchableGuest(chat.f);
         const matcher = chat.f.matcher.getByName("charoo");
         unwrap(await matcher.match(chat.a.actor));
         const matched = unwrap(await matcher.match(c.actor));

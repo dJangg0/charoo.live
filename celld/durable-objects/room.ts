@@ -4,7 +4,9 @@ import {
 } from "../features/profile-pictures/state";
 import {
   pictureSharingDecisionSchema,
-  QUICK_CHAT_DISCLOSURE_WORDS,
+  QUICK_CHAT_ASL_WORDS,
+  QUICK_CHAT_PICTURE_WORDS,
+  QUICK_CHAT_WORD_CAP,
 } from "@charoo/contracts";
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
@@ -36,6 +38,8 @@ type Participant = {
   joined_at: string;
   muted_until: string | null;
   word_count?: number;
+  // The cap word_count was computed under; counts stored under an older cap are recounted from history.
+  word_cap?: number;
   last_message_at: string | null;
   read_at: string | null;
   presence_until: number;
@@ -87,7 +91,7 @@ function disclosureWords(text: string) {
   let words = 0;
   for (const { segment, isWordLike } of wordSegmenter.segment(text)) {
     if (isWordLike && /\p{L}/u.test(segment)) words++;
-    if (words === QUICK_CHAT_DISCLOSURE_WORDS) break;
+    if (words === QUICK_CHAT_WORD_CAP) break;
   }
   return words;
 }
@@ -173,6 +177,7 @@ export class Room extends DurableObject<Env> {
       joined_at: iso(),
       muted_until: null,
       word_count: 0,
+      word_cap: QUICK_CHAT_WORD_CAP,
       last_message_at: null,
       read_at: null,
       presence_until: Date.now() + 90000,
@@ -222,20 +227,29 @@ export class Room extends DurableObject<Env> {
     this.save(r);
     this.outbox("projection", {});
   }
-  private disclosureEligible() {
+  private wordsEachAtLeast(threshold: number) {
     const people = this.people();
     return (
       this.meta().type === "STRANGER" &&
       people.length === 2 &&
       people.every(
-        (p) =>
-          p.state === "JOINED" &&
-          (p.word_count ?? 0) >= QUICK_CHAT_DISCLOSURE_WORDS,
+        (p) => p.state === "JOINED" && (p.word_count ?? 0) >= threshold,
       )
     );
   }
+  // ASL milestone: both participants have contributed ten words in this quick chat.
+  private aslEligible() {
+    return this.wordsEachAtLeast(QUICK_CHAT_ASL_WORDS);
+  }
+  // Picture milestone: both participants have contributed twenty words in this quick chat.
+  private pictureEligible() {
+    return this.wordsEachAtLeast(QUICK_CHAT_PICTURE_WORDS);
+  }
   private async ensureDisclosureWordCounts(roomId: string) {
-    const legacy = this.people().filter((p) => p.word_count === undefined);
+    // Counts stored before the current cap (ten-word cap, or no count) are recounted from history.
+    const legacy = this.people().filter(
+      (p) => p.word_cap !== QUICK_CHAT_WORD_CAP,
+    );
     if (!legacy.length) return;
     // Message writes in a legacy room wait for this same backfill before committing.
     this.disclosureUpgrade ??= this.backfillDisclosureWords(
@@ -254,9 +268,7 @@ export class Room extends DurableObject<Env> {
       ]),
     );
     let after = 0;
-    while (
-      [...progress.values()].some((p) => p.words < QUICK_CHAT_DISCLOSURE_WORDS)
-    ) {
+    while ([...progress.values()].some((p) => p.words < QUICK_CHAT_WORD_CAP)) {
       const rows = this.rows<{
         rowid: number;
         sender_id: string;
@@ -269,7 +281,7 @@ export class Room extends DurableObject<Env> {
       after = rows.at(-1)!.rowid;
       for (const row of rows) {
         const sender = progress.get(row.sender_id);
-        if (!sender || sender.words >= QUICK_CHAT_DISCLOSURE_WORDS) continue;
+        if (!sender || sender.words >= QUICK_CHAT_WORD_CAP) continue;
         const text = await decrypt(
           row.ciphertext,
           this.env.MESSAGE_KEY,
@@ -280,19 +292,21 @@ export class Room extends DurableObject<Env> {
         const fp = `words:${await fingerprint(text, this.env.MESSAGE_KEY, roomId)}`;
         if (sender.fingerprints.has(fp)) continue;
         sender.fingerprints.add(fp);
-        sender.words = Math.min(
-          QUICK_CHAT_DISCLOSURE_WORDS,
-          sender.words + words,
-        );
+        sender.words = Math.min(QUICK_CHAT_WORD_CAP, sender.words + words);
       }
     }
     this.ctx.storage.transactionSync(() => {
       this.open();
       for (const [id, { words, fingerprints }] of progress) {
         const participant = this.participant(id);
-        if (!participant || participant.word_count !== undefined) continue;
+        if (!participant || participant.word_cap === QUICK_CHAT_WORD_CAP)
+          continue;
         for (const fp of fingerprints) this.saveWordFingerprint(id, fp);
-        this.saveParticipant({ ...participant, word_count: words });
+        this.saveParticipant({
+          ...participant,
+          word_count: words,
+          word_cap: QUICK_CHAT_WORD_CAP,
+        });
       }
     });
   }
@@ -309,7 +323,7 @@ export class Room extends DurableObject<Env> {
   }
   private syncAsl() {
     const r = this.meta();
-    const eligible = this.disclosureEligible();
+    const eligible = this.aslEligible();
     if (r.type === "STRANGER" && r.asl_revealed !== eligible) {
       this.ctx.storage.transactionSync(() => {
         r.asl_revealed = eligible;
@@ -681,7 +695,7 @@ export class Room extends DurableObject<Env> {
         case "picture.share": {
           const b = pictureSharingDecisionSchema.parse(input);
           requireThat(
-            this.disclosureEligible(),
+            this.pictureEligible(),
             409,
             "Picture sharing is not available yet",
           );
@@ -696,7 +710,7 @@ export class Room extends DurableObject<Env> {
           this.ctx.storage.transactionSync(() => {
             this.membership(u.id);
             requireThat(
-              this.disclosureEligible(),
+              this.pictureEligible(),
               409,
               "Picture sharing is not available yet",
             );
@@ -725,7 +739,7 @@ export class Room extends DurableObject<Env> {
           return this.snapshot(actor);
         }
         case "picture.download": {
-          requireThat(this.disclosureEligible(), 404, "Picture unavailable");
+          requireThat(this.pictureEligible(), 404, "Picture unavailable");
           const p = this.participant(input.userId);
           requireThat(
             p?.state === "JOINED" &&
@@ -771,8 +785,7 @@ export class Room extends DurableObject<Env> {
           const words =
             room.type === "STRANGER" &&
             !b.attachmentId &&
-            (this.participant(u.id)?.word_count ?? 0) <
-              QUICK_CHAT_DISCLOSURE_WORDS
+            (this.participant(u.id)?.word_count ?? 0) < QUICK_CHAT_WORD_CAP
               ? disclosureWords(b.text)
               : 0;
           const fp = words
@@ -824,19 +837,18 @@ export class Room extends DurableObject<Env> {
             );
             if (
               fp &&
-              (p.word_count ?? 0) < QUICK_CHAT_DISCLOSURE_WORDS &&
+              (p.word_count ?? 0) < QUICK_CHAT_WORD_CAP &&
               this.saveWordFingerprint(u.id, fp)
             ) {
               p.word_count = Math.min(
-                QUICK_CHAT_DISCLOSURE_WORDS,
+                QUICK_CHAT_WORD_CAP,
                 (p.word_count ?? 0) + words,
               );
             }
             p.last_message_at = at;
             this.saveParticipant(p);
             r.last_activity = at;
-            if (r.type === "STRANGER")
-              r.asl_revealed = this.disclosureEligible();
+            if (r.type === "STRANGER") r.asl_revealed = this.aslEligible();
             this.save(r);
             this.changed();
             this.event("message", { id });
@@ -1379,7 +1391,7 @@ export class Room extends DurableObject<Env> {
   }
   private async snapshot(actor: Actor) {
     const r = await this.permit(actor),
-      aslRevealed = r.type === "STRANGER" && this.disclosureEligible(),
+      aslRevealed = r.type === "STRANGER" && this.aslEligible(),
       people = this.people()
         .filter((p) => p.state === "JOINED")
         .sort((a, b) => a.joined_at.localeCompare(b.joined_at))
@@ -1458,7 +1470,7 @@ export class Room extends DurableObject<Env> {
     }
     const pictureSharing =
       r.type === "STRANGER"
-        ? await this.pictureSharing(actor, aslRevealed)
+        ? await this.pictureSharing(actor, this.pictureEligible())
         : undefined;
     await this.permit(actor);
     return {

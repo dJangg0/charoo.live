@@ -69,8 +69,8 @@ for (const viewport of sizes) {
         },
       ],
       aslProgress: [
-        { id: visualIds.user, count: 10 },
-        { id: visualIds.peer, count: 10 },
+        { id: visualIds.user, count: 20 },
+        { id: visualIds.peer, count: 20 },
       ],
       pictureSharing: {
         eligible: true,

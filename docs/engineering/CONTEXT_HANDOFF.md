@@ -1,5 +1,21 @@
 # Charoo shared engineering handoff
 
+## Join identity and reconnect native verification, 2026-11-24
+
+- FR-04 now lets each group join enter with the profile or as a guest with an optional nickname (2 to 24 characters). Members and the host see the nickname; guest entries get no profile picture; earlier guest messages keep their nickname after a profile rejoin. The SRS FR-04 sentence is now [CURRENT]. Evidence is in the [matrix](IMPLEMENTATION_MATRIX.md) FR-04 section and the 2026-11-24 log row.
+- Verified locally: `pnpm check` (159 Vitest tests), `pnpm test:native` exit 0 (133 passing results, none failing). The first native run failed only the reconnect UI spec because the Chats button label includes an unread badge; the locator was corrected and the rerun passed.
+- Not verified: a deployed Worker, a manual two-browser walkthrough of the join modal, and any live payment gateway. Other members still see the account's opaque user identifier. Review follow-up: guest entries now also hide ASL and are refused contact/private requests (`hasParticipant(id, true)` in `social.create`), with tests; `pnpm check` rerun after this change.
+- Open decisions for the owner: whether hosts should see only the nickname (the implemented default) and whether to commit this work to PR #13.
+- Uncommitted: `SRS.md`, `docs/engineering/`, `celld/`, `packages/contracts/`, `src/`, `tests/`; new files `src/JoinIdentity.tsx`, `tests/join-identity.test.ts` and `tests/native/`.
+
+## Credits economy and quick-chat message milestone, 2026-11-22
+
+- Implemented the credits economy (FR-13, ships disabled by `credits_enabled=false`), BE-08 and AD-06, and changed FR-12 to distinct messages (ten each) with per-owner picture consent removed. Decisions: [ADR-05](ARCHITECTURE_DECISIONS.md#adr-05-credit-wallet-and-ledger-owned-by-appcoordinator), [ADR-06](ARCHITECTURE_DECISIONS.md#adr-06-message-based-profile-reveal-and-removal-of-per-chat-picture-consent). SRS, matrix and index updated.
+- Migration `0006_credits.sql` is additive and must be applied before production traffic. No remote migration or deploy was run.
+- Verified locally: `pnpm check` (149 Vitest tests), full Playwright suite 59/59 against local Celld and Vite, `pnpm test:native` exit 0, Cloudflare build and dry-run. Not verified: a deployed Worker, D1 migration on a remote database, a live payment gateway, and a manual two-browser walkthrough.
+- Open decisions for the owner: pack prices (provisional USD 5/12/35), whether the verification bonus should apply retroactively to accounts verified before the flag is enabled, and whether `402` is the right status for insufficient credits.
+- Pre-existing: `pnpm format:check` fails on HEAD `tests/ports.test.ts`; not changed here.
+
 ## Group avatar choice, 2026-11-22
 
 - Group joins (public or invited) ask members to choose their profile picture or one of eight generated avatars. Group rooms need no picture; quick chat still does. Pictures pinned to a group join are served only while approved.

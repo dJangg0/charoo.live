@@ -3,6 +3,7 @@ import indexes from "../migrations/0002_indexes.sql";
 import emailNavigation from "../migrations/0003_email_navigation.sql";
 import quickChatArchives from "../migrations/0004_quick_chat_archives.sql";
 import profilePictures from "../migrations/0005_profile_pictures.sql";
+import credits from "../migrations/0006_credits.sql";
 import type { Env } from "../env";
 import { defaultSettings } from "@charoo/contracts";
 import { first, run } from "./data";
@@ -13,6 +14,7 @@ export async function ensureSchema(env: Env) {
     ["0003_email_navigation.sql", emailNavigation],
     ["0004_quick_chat_archives.sql", quickChatArchives],
     ["0005_profile_pictures.sql", profilePictures],
+    ["0006_credits.sql", credits],
   ] as const;
   if (env.NODE_ENV === "production") {
     let ready = false;

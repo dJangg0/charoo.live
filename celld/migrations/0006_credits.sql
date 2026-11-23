@@ -1,0 +1,10 @@
+CREATE TABLE credit_wallets(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,balance INTEGER NOT NULL DEFAULT 0 CHECK(balance>=0),lifetime_earned INTEGER NOT NULL DEFAULT 0,lifetime_spent INTEGER NOT NULL DEFAULT 0,extra_contact_slots INTEGER NOT NULL DEFAULT 0 CHECK(extra_contact_slots>=0),last_daily_grant_on TEXT,daily_streak INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
+CREATE TABLE credit_entries(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,entry_key TEXT NOT NULL UNIQUE,kind TEXT NOT NULL CHECK(kind IN ('GRANT_VERIFY','GRANT_DAILY','GRANT_ACTIVITY','TOPUP','SPEND_PEEK','SPEND_SLOTS','SPEND_RECONNECT','ADMIN_ADJUST')),delta INTEGER NOT NULL,balance_after INTEGER NOT NULL CHECK(balance_after>=0),reference TEXT,created_at TEXT NOT NULL);
+CREATE TRIGGER credit_entries_no_update BEFORE UPDATE ON credit_entries BEGIN SELECT RAISE(ABORT,'credit ledger is append-only'); END;
+CREATE TRIGGER credit_entries_no_delete BEFORE DELETE ON credit_entries BEGIN SELECT RAISE(ABORT,'credit ledger is append-only'); END;
+CREATE TABLE credit_orders(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,provider TEXT NOT NULL,provider_reference TEXT,pack_id TEXT NOT NULL,credits INTEGER NOT NULL CHECK(credits>0),amount_minor INTEGER NOT NULL CHECK(amount_minor>=0),currency TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'PENDING' CHECK(state IN ('PENDING','PAID','FAILED','EXPIRED','CANCELLED')),created_at TEXT NOT NULL,settled_at TEXT,UNIQUE(provider,provider_reference));
+CREATE TABLE profile_peeks(room_id TEXT NOT NULL,viewer_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,subject_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,created_at TEXT NOT NULL,PRIMARY KEY(room_id,viewer_id));
+CREATE INDEX credit_entries_user_created ON credit_entries(user_id,created_at DESC);
+CREATE INDEX credit_orders_user_created ON credit_orders(user_id,created_at DESC);
+CREATE INDEX credit_orders_state_created ON credit_orders(state,created_at);
+CREATE INDEX IF NOT EXISTS contacts_user_b ON contacts(user_b);

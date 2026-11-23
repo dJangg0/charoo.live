@@ -2,9 +2,19 @@ import { Realtime } from "./realtime";
 import { RoomSidebar } from "./RoomSidebar";
 import { JoinRoomForm } from "./JoinRoomForm";
 import { AvatarChoicePicker } from "./AvatarChoice";
+import { JoinIdentityChoice } from "./JoinIdentity";
 import { ThemeSettings } from "./ThemeSettings";
 import { ProfilePicture } from "./ProfilePicture";
-import { QuickChatDisclosure, QuickChatProgress } from "./QuickChatDisclosure";
+import {
+  QuickChatDisclosure,
+  QuickChatProgress,
+  type PeekView,
+} from "./QuickChatDisclosure";
+import {
+  CreditsPage,
+  type CreditSummary,
+  type LedgerState,
+} from "./CreditsPage";
 import { useTheme } from "./useTheme";
 import {
   useEffect,
@@ -49,6 +59,7 @@ import {
   Archive,
   Coffee,
   Smile,
+  Coins,
 } from "lucide-react";
 import {
   categories,
@@ -69,10 +80,16 @@ type Page =
   | "strangers"
   | "groups"
   | "contacts"
+  | "credits"
   | "profile"
   | "admin";
 type MessagePage = { messages: Message[]; next: string | null };
 type RefreshScope = "room" | "messages" | "all";
+// Test-mode checkout return path: #credits-checkout=<reference>.
+function sandboxReferenceFromHash() {
+  const match = /credits-checkout=([A-Za-z0-9-]{8,120})/.exec(location.hash);
+  return match ? match[1] : null;
+}
 type ChatView = {
   id: string;
   controller: AbortController;
@@ -247,7 +264,11 @@ export function App() {
   const [user, setUser] = useState<User | null>(null),
     [loading, setLoading] = useState(true),
     [page, setPage] = useState<Page>(
-      location.pathname.startsWith("/admin") ? "admin" : "groups",
+      location.pathname.startsWith("/admin")
+        ? "admin"
+        : sandboxReferenceFromHash()
+          ? "credits"
+          : "groups",
     ),
     [settings, setSettings] = useState<AppSettings | null>(null),
     [rooms, setRooms] = useState<Room[]>([]),
@@ -265,6 +286,8 @@ export function App() {
       kind: "avatar",
       id: "sky",
     }),
+    [joinAs, setJoinAs] = useState<"profile" | "guest">("profile"),
+    [guestNickname, setGuestNickname] = useState(""),
     [hasPicture, setHasPicture] = useState(false),
     [publicJoin, setPublicJoin] = useState<{
       roomId: string;
@@ -276,6 +299,20 @@ export function App() {
     [category, setCategory] = useState(""),
     [requests, setRequests] = useState<any[]>([]),
     [contacts, setContacts] = useState<any[]>([]),
+    [credits, setCredits] = useState<CreditSummary | null>(null),
+    [creditsLoad, setCreditsLoad] = useState<"idle" | "loading" | "error">(
+      "idle",
+    ),
+    [creditsError, setCreditsError] = useState<string | undefined>(),
+    [ledger, setLedger] = useState<LedgerState>({
+      entries: [],
+      next: null,
+      state: "idle",
+    }),
+    [peekPending, setPeekPending] = useState(false),
+    [sandboxReference, setSandboxReference] = useState<string | null>(() =>
+      sandboxReferenceFromHash(),
+    ),
     [history, setHistory] = useState<any[]>([]),
     [blocks, setBlocks] = useState<any[]>([]),
     [shareUrl, setShareUrl] = useState(""),
@@ -670,6 +707,11 @@ export function App() {
       setAdminLoading(false);
     }
   }
+  // The identity a join request carries: the profile, or a guest entry with an optional nickname.
+  const joinIdentityPayload = () =>
+    joinAs === "guest"
+      ? { mode: "guest" as const, nickname: guestNickname.trim() || undefined }
+      : { mode: "profile" as const };
   async function joinShared() {
     if (joinProfilePending) return;
     const t = new URLSearchParams(location.hash.slice(1)).get("room");
@@ -678,6 +720,7 @@ export function App() {
         const result = await api("/shared/join", "POST", {
           token: t,
           avatar: avatarChoice,
+          identity: joinIdentityPayload(),
         });
         if (result.pending) {
           setPendingJoin({
@@ -1071,6 +1114,17 @@ export function App() {
         icon: "/icon-192.png",
       });
     if (
+      event.type === "request.responded" &&
+      event.payload?.expired &&
+      event.payload?.requesterId === userRef.current?.id
+    ) {
+      notify(
+        "Your reconnect wasn’t completed because you don’t have enough credits.",
+        true,
+      );
+      background(loadCredits);
+    }
+    if (
       [
         "request",
         "request.responded",
@@ -1370,27 +1424,121 @@ export function App() {
       });
     });
   }
-  async function decidePictureSharing(
-    roomId: string,
-    decision: "approved" | "declined",
-    pictureId?: string,
-  ) {
-    const view = chatView.current;
-    if (view?.id !== roomId || activeRef.current.type !== "STRANGER")
-      return;
+  // Credits (FR-13). Balances come only from authoritative responses; nothing is updated optimistically.
+  const creditsEnabled = Boolean(settings?.credits_enabled);
+  const reconnectPrice = creditsEnabled
+    ? Number(settings?.reconnect_price ?? 0)
+    : 0;
+  async function loadCredits() {
+    setCreditsLoad("loading");
+    try {
+      setCredits(await api("/credits"));
+      setCreditsError(undefined);
+      setCreditsLoad("idle");
+    } catch (error) {
+      setCreditsError((error as Error).message);
+      setCreditsLoad("error");
+    }
+  }
+  async function loadLedger(more = false) {
+    setLedger((prev) => ({ ...prev, state: "loading", error: undefined }));
+    try {
+      const cursor = more ? ledger.next : null;
+      const page = await api(
+        `/credits/ledger${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+      );
+      setLedger((prev) => ({
+        entries: more ? [...prev.entries, ...page.entries] : page.entries,
+        next: page.next,
+        state: "idle",
+      }));
+    } catch (error) {
+      setLedger((prev) => ({
+        ...prev,
+        state: "error",
+        error: (error as Error).message,
+      }));
+    }
+  }
+  async function claimDaily() {
+    await act(async () => {
+      const result = await api("/credits/daily", "POST", {});
+      notify(
+        result.claimed
+          ? `Claimed ${result.amount} credits.`
+          : "You already claimed today’s credits.",
+      );
+      await Promise.all([loadCredits(), loadLedger()]);
+    });
+  }
+  async function buySlots() {
+    await act(async () => {
+      const result = await api("/credits/contact-slots", "POST", {
+        clientOperationId: randomUUID(),
+      });
+      notify(
+        result.purchased
+          ? "Contact slots added."
+          : "Those slots were already added.",
+      );
+      await Promise.all([loadCredits(), loadLedger()]);
+    });
+  }
+  async function buyPack(packId: string) {
+    await act(async () => {
+      const order = await api("/credits/orders", "POST", { packId });
+      // Only the sandbox checkout exists; a real gateway would redirect instead.
+      const reference = String(order.url).split("credits-checkout=")[1];
+      setSandboxReference(reference);
+      window.history.replaceState(null, "", `${location.pathname}#credits-checkout=${reference}`);
+    });
+  }
+  async function confirmSandbox(reference: string) {
+    await act(async () => {
+      await api("/credits/sandbox/confirm", "POST", { reference });
+      setSandboxReference(null);
+      window.history.replaceState(null, "", location.pathname);
+      notify("Test payment confirmed. Credits added.");
+      await Promise.all([loadCredits(), loadLedger()]);
+    });
+  }
+  // A paid peek. The spinner clears only when the refetched snapshot confirms the reveal.
+  async function buyPeek(peek: PeekView) {
+    const room = active;
+    if (!room || room.type !== "STRANGER") return;
+    setPeekPending(true);
     await act(async () => {
       try {
-        const snapshot = await api(`/rooms/${roomId}/picture-sharing`, "POST", {
-          decision,
-          ...(decision === "approved" ? { pictureId } : {}),
+        await api(`/rooms/${room.id}/peek`, "POST", {
+          revealsAsl: peek.revealsAsl,
+          revealsPicture: peek.revealsPicture,
         });
-        if (chatView.current === view) applyRoomSnapshot(snapshot);
+        await refreshChat(room.id, "all");
+        await loadCredits();
       } catch (error) {
-        if (chatView.current === view) await refreshChat(roomId, "room");
+        setPeekPending(false);
+        await refreshChat(room.id, "all");
         throw error;
       }
     });
   }
+  useEffect(() => {
+    // If credits are switched off while the page is open, leave it rather than render nothing.
+    if (page === "credits" && settings && !settings.credits_enabled)
+      setPage("groups");
+  }, [page, settings?.credits_enabled]);
+  useEffect(() => {
+    if (peekPending && active?.peek?.purchased) setPeekPending(false);
+  }, [peekPending, active?.peek?.purchased]);
+  useEffect(() => {
+    setPeekPending(false);
+  }, [active?.id]);
+  useEffect(() => {
+    if (!creditsEnabled || !user?.verified) return;
+    if (page === "credits" || page === "contacts" || active?.type === "STRANGER")
+      void loadCredits();
+    if (page === "credits") void loadLedger();
+  }, [page, active?.id, user?.id, creditsEnabled]);
   const nav: [Page, string, ReactNode][] = [
     ["groups", "Chats", <MessageCircle size={20} />],
     ["tonight", "Discover rooms", <Compass size={20} />],
@@ -1408,6 +1556,15 @@ export function App() {
     { id: "contacts", label: "Contacts", icon: <Users size={20} /> },
     { id: "profile", label: "Profile", icon: <UserRound size={20} /> },
   ];
+  if (creditsEnabled)
+    mobileTabs.splice(4, 0, {
+      id: "credits",
+      label: "Credits",
+      icon: <Coins size={20} />,
+    });
+  // Next to Contacts (index 3), before Profile.
+  if (creditsEnabled)
+    nav.splice(4, 0, ["credits", "Credits", <Coins size={20} />]);
   if (user && user.role !== "USER")
     nav.push(["admin", "Moderation", <Shield size={20} />]);
   const choosePage = (p: Page) => {
@@ -2112,9 +2269,11 @@ export function App() {
               <em>Something unexpected.</em>
             </h1>
             <p>
-              Start a spontaneous one-to-one conversation. Your profile stays
-              private until you choose to share. Conversations expire after they
-              end.
+              Start a spontaneous one-to-one conversation. Your profile picture is
+              shown to your partner once you’ve both sent{" "}
+              {settings?.quickchat_picture_message_threshold ?? 10} messages in
+              this chat. Your age, sex and location follow your profile settings.
+              Conversations expire after they end.
             </p>
             <button
               type="button"
@@ -2359,6 +2518,14 @@ export function App() {
                           })}
                         </small>
                       </span>
+                      {request.reconnect_price > 0 &&
+                        request.requester_can_afford === false && (
+                          <p className="muted reconnect-cost-note">
+                            {request.display_name} doesn’t have{" "}
+                            {request.reconnect_price} credits right now, so
+                            accepting may not complete.
+                          </p>
+                        )}
                       <div className="reconnect-notice-actions">
                         <button
                           className="button small"
@@ -2436,7 +2603,7 @@ export function App() {
                             : match.reconnectable
                               ? match.reconnect_pending
                                 ? "Request pending"
-                                : "Request reconnect"
+                                : `Request reconnect${reconnectPrice ? ` · ${reconnectPrice} credits` : ""}`
                               : "Unavailable"}
                         </button>
                       </article>
@@ -2449,6 +2616,37 @@ export function App() {
                 </div>
               </details>
             )}
+          </section>
+        )}
+        {!active && page === "credits" && creditsEnabled && (
+          <section className="content-page">
+            <span className="eyebrow">EARN, SAVE, CONNECT</span>
+            <h1>
+              Your credits<span className="accent">.</span>
+            </h1>
+            <CreditsPage
+              verified={!!user?.verified}
+              credits={credits}
+              loadState={creditsLoad}
+              loadError={creditsError}
+              ledger={ledger}
+              busy={busy}
+              sandboxReference={sandboxReference}
+              onRetry={() => {
+                void loadCredits();
+                void loadLedger();
+              }}
+              onClaim={() => void claimDaily()}
+              onBuySlots={() => void buySlots()}
+              onBuyPack={(packId) => void buyPack(packId)}
+              onLoadMore={() => void loadLedger(true)}
+              onConfirmSandbox={(reference) => void confirmSandbox(reference)}
+              onCancelSandbox={() => {
+                setSandboxReference(null);
+                window.history.replaceState(null, "", location.pathname);
+              }}
+              onVerify={() => setModal("email")}
+            />
           </section>
         )}
         {!active && page === "contacts" && (
@@ -2512,6 +2710,24 @@ export function App() {
                     </div>
                   ))}
                 </div>
+                {creditsEnabled && credits && (
+                  <p className="contact-storage" role="status">
+                    {credits.contactSlots.used} of {credits.contactSlots.limit}{" "}
+                    saved.{" "}
+                    {credits.contactSlots.used >= credits.contactSlots.limit
+                      ? "Storage is full. "
+                      : ""}
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => choosePage("credits")}
+                    >
+                      {credits.contactSlots.used >= credits.contactSlots.limit
+                        ? "Buy more slots"
+                        : "Manage credits"}
+                    </button>
+                  </p>
+                )}
                 <h2>Saved contacts</h2>
                 <div className="list">
                   {contacts.map((c) => (
@@ -2775,14 +2991,20 @@ export function App() {
             </div>
             <div className="chat-layout">
               <div className="chat-main">
-                {active.type === "STRANGER" &&
-                  user &&
-                  !active.pictureSharing?.eligible && (
-                    <QuickChatProgress
-                      userId={user.id}
-                      progress={active.aslProgress || []}
-                    />
-                  )}
+                {active.type === "STRANGER" && user && (
+                  <QuickChatProgress
+                    userId={user.id}
+                    peerId={
+                      active.aslProgress?.find((p: any) => p.id !== user.id)
+                        ?.id || ""
+                    }
+                    aslProgress={active.aslProgress || []}
+                    pictureProgress={active.pictureProgress || []}
+                    thresholds={
+                      active.thresholds || { aslWords: 10, pictureMessages: 10 }
+                    }
+                  />
+                )}
                 <div className="messages" aria-live="polite">
                   {messageNext && (
                     <button
@@ -2937,11 +3159,12 @@ export function App() {
                     <QuickChatDisclosure
                       key={active.id}
                       userId={user.id}
-                      sharing={active.pictureSharing}
-                      busy={busy}
-                      onDecision={(decision, pictureId) =>
-                        decidePictureSharing(active.id, decision, pictureId)
-                      }
+                      pictureReveal={active.pictureReveal}
+                      peek={active.peek}
+                      balance={credits?.balance ?? null}
+                      peekPending={peekPending}
+                      onPeek={(peek) => void buyPeek(peek)}
+                      onOpenCredits={() => choosePage("credits")}
                     />
                   )}
                   {typing && <p className="typing">Someone is typing…</p>}
@@ -3379,7 +3602,6 @@ export function App() {
                               type="number"
                               name={k}
                               defaultValue={Number(v)}
-                              readOnly={k === "reconnect_price"}
                             />
                           )}
                         </label>
@@ -3722,6 +3944,7 @@ export function App() {
                 void act(async () => {
                   await api(`/rooms/${target.roomId}/join`, "POST", {
                     avatar: avatarChoice,
+                    identity: joinIdentityPayload(),
                   });
                   setModal(null);
                   setPublicJoin(null);
@@ -3734,10 +3957,22 @@ export function App() {
                 Choose how others see you in {publicJoin?.title || "this"}{" "}
                 conversation. You can still leave whenever you want.
               </p>
+              <JoinIdentityChoice
+                mode={joinAs}
+                onModeChange={(mode) => {
+                  setJoinAs(mode);
+                  if (mode === "guest" && avatarChoice.kind === "picture")
+                    setAvatarChoice({ kind: "avatar", id: "sky" });
+                }}
+                nickname={guestNickname}
+                onNicknameChange={setGuestNickname}
+                profileName={user?.displayName || "your profile"}
+              />
               <AvatarChoicePicker
                 value={avatarChoice}
                 onChange={setAvatarChoice}
                 hasPicture={hasPicture}
+                allowPicture={joinAs === "profile"}
               />
               <button className="button" disabled={busy}>
                 Join conversation <ArrowRight size={16} />
@@ -3750,10 +3985,22 @@ export function App() {
                 sex are optional and follow your profile visibility setting.
               </p>
               <JoinProfileFields profile={user?.profile} />
+              <JoinIdentityChoice
+                mode={joinAs}
+                onModeChange={(mode) => {
+                  setJoinAs(mode);
+                  if (mode === "guest" && avatarChoice.kind === "picture")
+                    setAvatarChoice({ kind: "avatar", id: "sky" });
+                }}
+                nickname={guestNickname}
+                onNicknameChange={setGuestNickname}
+                profileName={user?.displayName || "your profile"}
+              />
               <AvatarChoicePicker
                 value={avatarChoice}
                 onChange={setAvatarChoice}
                 hasPicture={hasPicture}
+                allowPicture={joinAs === "profile"}
               />
               <button className="button" disabled={busy}>
                 Join room <ArrowRight size={16} />

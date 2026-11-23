@@ -288,3 +288,39 @@ export async function matchableGuest(
   await addApprovedPicture(f, g);
   return g;
 }
+
+// Quick-chat helpers for milestone tests. Each message has distinct letter words.
+let milestoneSequence = 0;
+export async function sendQuickChatMessages(
+  room: { command(actor: Actor, kind: string, input?: any): Promise<any> },
+  owner: { actor: Actor },
+  count: number,
+) {
+  for (let i = 0; i < count; i++)
+    unwrap(
+      await room.command(owner.actor, "message", {
+        text: `quick chat note ${++milestoneSequence} ${owner.actor.userId.slice(0, 8)}`,
+        clientMessageId: crypto.randomUUID(),
+      }),
+    );
+}
+
+// Both participants reach the profile milestone (default ten distinct messages each).
+export async function reachProfileMilestone(
+  room: { command(actor: Actor, kind: string, input?: any): Promise<any> },
+  a: { actor: Actor },
+  b: { actor: Actor },
+  count = 10,
+) {
+  await sendQuickChatMessages(room, a, count);
+  await sendQuickChatMessages(room, b, count);
+}
+
+// Deliver queued room jobs (credit grants, call ends) the way the Worker queue consumer does.
+export async function runJobs(f: Awaited<ReturnType<typeof fixture>>) {
+  for (const job of f.jobs.splice(0)) {
+    if (job.source === "room")
+      await f.rooms.getByName(`charoo:${job.id}`).deliver(job.operationId);
+    else await f.app.deliver(job.operationId);
+  }
+}

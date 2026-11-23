@@ -292,5 +292,87 @@ test("public room joins ask for a picture or avatar before joining", async ({
     .getByRole("button", { name: "Join conversation", exact: true })
     .click();
   await expect.poll(() => joins.length).toBe(1);
-  expect(joins[0]).toEqual({ avatar: { kind: "avatar", id: "rose" } });
+  expect(joins[0]).toEqual({
+    avatar: { kind: "avatar", id: "rose" },
+    identity: { mode: "profile" },
+  });
+});
+
+test("public room joins can enter as a guest with a nickname and no profile picture", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await visualFixture(context);
+  const joins: unknown[] = [];
+  await page.route(`**/api/rooms/${visualIds.public}/join`, (route) => {
+    joins.push(route.request().postDataJSON());
+    return route.fulfill({ json: { id: visualIds.public } });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Discover rooms", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Join the conversation" })
+    .first()
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Join this conversation",
+    exact: true,
+  });
+  await expect(dialog).toBeVisible();
+  // A guest entry offers generated avatars only; the profile picture option is not shown.
+  await page
+    .getByRole("radio", { name: "Join as a guest", exact: true })
+    .check();
+  await expect(
+    dialog.getByRole("radio", { name: "Rose avatar", exact: true }),
+  ).toBeVisible();
+  await expect(dialog.getByText("Use my profile picture")).toHaveCount(0);
+  await page
+    .getByRole("textbox", { name: /^Nickname \(optional\)/ })
+    .fill("Night owl");
+  await page
+    .getByRole("button", { name: "Join conversation", exact: true })
+    .click();
+  await expect.poll(() => joins.length).toBe(1);
+  expect(joins[0]).toEqual({
+    avatar: { kind: "avatar", id: "sky" },
+    identity: { mode: "guest", nickname: "Night owl" },
+  });
+});
+
+test("a guest join without a nickname sends no nickname, so the room gives a random name", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await visualFixture(context);
+  const joins: unknown[] = [];
+  await page.route(`**/api/rooms/${visualIds.public}/join`, (route) => {
+    joins.push(route.request().postDataJSON());
+    return route.fulfill({ json: { id: visualIds.public } });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("button", { name: "Discover rooms", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Join the conversation" })
+    .first()
+    .click();
+  await page
+    .getByRole("radio", { name: "Join as a guest", exact: true })
+    .check();
+  await page
+    .getByRole("button", { name: "Join conversation", exact: true })
+    .click();
+  await expect.poll(() => joins.length).toBe(1);
+  expect(joins[0]).toEqual({
+    avatar: { kind: "avatar", id: "sky" },
+    identity: { mode: "guest" },
+  });
 });

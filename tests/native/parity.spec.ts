@@ -369,20 +369,23 @@ test("concurrent room limits, matching, cancellation and contact acceptance", as
         .sort(),
     ).toEqual([10, 9]);
     expect(locked.asl_revealed).toBe(false);
-    expect(locked.pictureSharing.eligible).toBe(false);
+    expect(locked.pictureReveal.eligible).toBe(false);
     await send(b, "J");
     const unlocked = await (await b.api(roomPath)).json();
     expect(unlocked.asl_revealed).toBe(true);
-    expect(unlocked.pictureSharing.eligible).toBe(false);
-    expect(unlocked.pictureSharing.participants).toEqual([]);
-    // Ten more distinct words each reach the twenty-word picture milestone.
-    await send(
-      a,
-      "Eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty",
-    );
-    await send(b, "K L M N O P Q R S T");
+    // Words unlock ASL; the profile reveal needs ten distinct messages each.
+    expect(unlocked.pictureReveal.eligible).toBe(false);
+    expect(unlocked.pictureReveal.participants).toEqual([]);
+    // Each participant reaches ten distinct letter-bearing messages.
+    for (let i = 0; i < 9; i++) await send(a, `alpha note ${i}`);
+    for (let i = 0; i < 8; i++) await send(b, `bravo note ${i}`);
     const pictureReady = await (await b.api(roomPath)).json();
-    expect(pictureReady.pictureSharing.eligible).toBe(true);
+    expect(
+      pictureReady.pictureProgress
+        .map((p: { count: number }) => p.count)
+        .sort(),
+    ).toEqual([10, 10]);
+    expect(pictureReady.pictureReveal.eligible).toBe(true);
     const request = await (
       await a.api("/requests", "POST", {
         kind: "CONTACT",

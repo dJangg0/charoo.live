@@ -1,6 +1,14 @@
 import type { Hono } from "hono";
 import { z, requestSchema, reportSchema } from "@charoo/contracts";
-import { all, run, coordinator, roomStub, iso } from "../../shared/data";
+import {
+  all,
+  run,
+  coordinator,
+  roomStub,
+  settings,
+  iso,
+} from "../../shared/data";
+import { reconnectPrice } from "../credits/wallet";
 import { requireThat, unwrap } from "../../shared/errors";
 import { actor, body, uuid, userRate, type HttpEnv } from "../../http/context";
 
@@ -73,15 +81,41 @@ export function socialRoutes(app: Hono<HttpEnv>) {
       );
     },
   );
-  app.get("/api/requests", async (c) =>
-    c.json(
-      await all(
-        c.env,
-        `SELECT s.*,u.display_name FROM social_requests s JOIN users u ON u.id=s.requester_id WHERE s.target_id=? AND s.state='PENDING' AND s.expires_at>? ORDER BY s.created_at DESC`,
-        [actor(c).userId, iso()],
+  app.get("/api/requests", async (c) => {
+    const rows = await all(
+      c.env,
+      `SELECT s.*,u.display_name FROM social_requests s JOIN users u ON u.id=s.requester_id WHERE s.target_id=? AND s.state='PENDING' AND s.expires_at>? ORDER BY s.created_at DESC`,
+      [actor(c).userId, iso()],
+    );
+    // Reconnect price and whether the requester can pay it when accepted.
+    const price = reconnectPrice(await settings(c.env));
+    // One balance lookup for every reconnect requester; skipped while reconnect is free.
+    const requesterIds = [
+      ...new Set(
+        rows.filter((r) => r.kind === "RECONNECT").map((r) => r.requester_id),
       ),
-    ),
-  );
+    ];
+    const balances = new Map<string, number>();
+    if (price > 0 && requesterIds.length)
+      for (const w of await all(
+        c.env,
+        `SELECT user_id,balance FROM credit_wallets WHERE user_id IN (${requesterIds.map(() => "?").join(",")})`,
+        requesterIds,
+      ))
+        balances.set(w.user_id, Number(w.balance));
+    return c.json(
+      rows.map((row) =>
+        row.kind === "RECONNECT"
+          ? {
+              ...row,
+              reconnect_price: price,
+              requester_can_afford:
+                price === 0 || (balances.get(row.requester_id) ?? 0) >= price,
+            }
+          : row,
+      ),
+    );
+  });
   app.post("/api/requests", body(requestSchema), async (c) => {
     await userRate(c, "request", 10, 3600, "Request limit reached");
     return c.json(

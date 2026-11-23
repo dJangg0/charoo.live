@@ -5492,3 +5492,128 @@ canvas {
   height: 42px;
   object-fit: cover;
 }
+
+/* Credits economy (FR-13) and quick-chat milestones. */
+.quick-chat-progress {
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
+.quick-chat-progress-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1 1 320px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.quick-chat-progress-group .quick-chat-progress-people {
+  flex: 1 1 220px;
+}
+.peek-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.peek-panel p {
+  margin: 0;
+}
+.peek-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.peek-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.peek-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: currentColor;
+  animation: peek-spin 0.9s linear infinite;
+}
+@keyframes peek-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .peek-spinner {
+    animation-duration: 3s;
+  }
+}
+.credits-page {
+  display: grid;
+  gap: 16px;
+  max-width: 640px;
+}
+.credits-balance {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.credits-balance-amount {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 2rem;
+  font-weight: 700;
+}
+.credits-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.credits-card h3 {
+  margin: 0;
+}
+.credits-card p {
+  margin: 0;
+}
+.credits-packs,
+.credits-ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.credits-packs li,
+.credits-ledger li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.credit-debit {
+  font-variant-numeric: tabular-nums;
+  color: var(--danger, #b42318);
+}
+.credit-credit {
+  font-variant-numeric: tabular-nums;
+  color: var(--success, #067647);
+}
+.credits-sandbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.contact-storage,
+.reconnect-cost-note {
+  font-size: 0.9rem;
+}

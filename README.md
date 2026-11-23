@@ -222,6 +222,8 @@ Hosting provisioning and publishing are separate from this migration. Use an exi
    ```
 
 5. Publishing, when authorized, uses the same command without `--dry-run`. Startup waits for the expected D1 migration records. Keep the Worker name, `ROOM`/`Room` binding, and existing `v1` migration. New classes are introduced by `v2`; future migrations must be appended.
+
+   Migrations `0005_profile_pictures.sql` and `0006_credits.sql` are required before production traffic. `0006` adds the credit wallet, the append-only ledger, purchase orders and quick-chat peeks. Credits stay disabled until an admin enables `credits_enabled`. The payment sandbox is never available in production, and `CREDITS_WEBHOOK_SECRET` is a Worker secret, not a `vars` entry.
 6. After the operator's account verifies its email, grant its staff role through native D1:
 
    ```sh

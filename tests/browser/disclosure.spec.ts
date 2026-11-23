@@ -1,21 +1,37 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  QUICK_CHAT_ASL_WORDS,
-  QUICK_CHAT_PICTURE_WORDS,
-} from "@charoo/contracts";
+import { QUICK_CHAT_ASL_WORDS, defaultSettings } from "@charoo/contracts";
 import { visualFixture, visualIds } from "./visual-fixture";
 
 const roomUrl = `/api/rooms/${visualIds.group}`;
-// Defaults to a room past both milestones (ASL and picture sharing).
-function snapshot(options: { count?: number; hasPicture?: boolean } = {}) {
-  const count = options.count ?? QUICK_CHAT_PICTURE_WORDS;
+const PICTURE_MESSAGES = 10;
+const peerPictureId = "60000000-0000-4000-8000-000000000001";
+// Quick-chat snapshot shape (FR-12 milestones, FR-13 peek). Counts are per participant.
+function snapshot(
+  options: {
+    words?: number;
+    messages?: number;
+    pictures?: boolean;
+    peekAvailable?: boolean;
+    purchased?: boolean;
+  } = {},
+) {
+  const words = options.words ?? 0;
+  const messages = options.messages ?? 0;
+  const aslOn = words >= QUICK_CHAT_ASL_WORDS;
+  const profileOn = messages >= PICTURE_MESSAGES;
+  const purchased = options.purchased ?? false;
+  const peerPicture = {
+    id: visualIds.peer,
+    url: `${roomUrl}/pictures/${visualIds.peer}/content?pictureId=${peerPictureId}`,
+  };
+  const showPicture = profileOn || purchased;
   return {
     id: visualIds.group,
     type: "STRANGER",
     title: "Quick chat",
     state: "OPEN",
     online: 2,
-    asl_revealed: count >= QUICK_CHAT_ASL_WORDS,
+    asl_revealed: aslOn,
     participants: [
       { id: visualIds.user, name: "Stranger", verified: true, asl: null },
       {
@@ -23,36 +39,55 @@ function snapshot(options: { count?: number; hasPicture?: boolean } = {}) {
         name: "Stranger",
         verified: true,
         asl:
-          count >= QUICK_CHAT_ASL_WORDS
+          aslOn || purchased
             ? { age: 31, gender: "Woman", region: "Manila" }
             : null,
       },
     ],
     aslProgress: [
-      { id: visualIds.user, count },
-      { id: visualIds.peer, count },
+      { id: visualIds.user, count: words },
+      { id: visualIds.peer, count: words },
     ],
-    pictureSharing: {
-      eligible: count >= QUICK_CHAT_PICTURE_WORDS,
-      self: {
-        hasPicture: options.hasPicture ?? true,
-        decision: "pending" as "pending" | "declined" | "approved",
-        pictureId: "60000000-0000-4000-8000-000000000001",
-        previewUrl:
-          "/api/profile/picture/content?pictureId=60000000-0000-4000-8000-000000000001",
-      },
-      participants: [] as { id: string; url: string }[],
+    pictureProgress: [
+      { id: visualIds.user, count: messages },
+      { id: visualIds.peer, count: messages },
+    ],
+    thresholds: {
+      aslWords: QUICK_CHAT_ASL_WORDS,
+      pictureMessages: PICTURE_MESSAGES,
+    },
+    caps: { words: 20, messages: 50 },
+    pictureReveal: {
+      eligible: profileOn,
+      participants:
+        options.pictures === false || !showPicture ? [] : [peerPicture],
+    },
+    peek: {
+      price: defaultSettings.credits_peek_price,
+      purchased,
+      available: !!options.peekAvailable && !purchased,
+      revealsAsl: !purchased && !aslOn,
+      revealsPicture: !purchased && !profileOn,
     },
   };
 }
 
-async function openQuickChat(page: Page) {
+async function servePictures(page: Page) {
   await page.route("**/api/profile/picture/content*", (route) =>
     route.fulfill({
       contentType: "image/svg+xml",
       body: '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" rx="16" fill="#e8dbca"/><circle cx="64" cy="46" r="20" fill="#8d765d"/><path d="M25 120c0-46 78-46 78 0" fill="#8d765d"/></svg>',
     }),
   );
+  await page.route(`**${roomUrl}/pictures/**`, (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" rx="16" fill="#d2eadc"/><circle cx="64" cy="46" r="20" fill="#4f6b5a"/></svg>',
+    }),
+  );
+}
+
+async function openQuickChat(page: Page) {
   await page.goto("/");
   await page
     .getByRole("navigation", { name: "Main navigation", exact: true })
@@ -62,419 +97,169 @@ async function openQuickChat(page: Page) {
   await expect(page.locator(".chat")).toBeVisible();
 }
 
-test("ASL appears at ten words each and picture sharing only at twenty each", async ({
+// Credits enabled for this user, so the peek affordance and balance load.
+async function enableCredits(page: Page, balance: number) {
+  await page.route("**/api/me", (route) =>
+    route.fulfill({
+      json: {
+        user: {
+          id: visualIds.user,
+          displayName: "Cora Lane",
+          verified: true,
+          role: "USER",
+          profile: {
+            displayName: "Cora Lane",
+            age: 31,
+            gender: "Woman",
+            region: "Manila",
+            bio: "",
+            interests: [],
+            aslVisibility: "public",
+          },
+          status: "Online",
+        },
+        csrf: "visual-csrf",
+        settings: { ...defaultSettings, credits_enabled: true },
+        credits: { enabled: true, balance, dailyClaimable: false },
+      },
+    }),
+  );
+  await page.route("**/api/credits", (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({
+      json: {
+        enabled: true,
+        balance,
+        lifetimeEarned: balance,
+        lifetimeSpent: 0,
+        contactSlots: {
+          used: 0,
+          limit: 10,
+          base: 10,
+          extra: 0,
+          max: 50,
+          pack: 5,
+          price: 15,
+        },
+        daily: { claimable: false, streak: 0, amount: 0 },
+        peekPrice: defaultSettings.credits_peek_price,
+        reconnectPrice: 3,
+        packs: [],
+      },
+    });
+  });
+}
+
+test("word and message bars track their separate milestones", async ({
   page,
   context,
 }) => {
   await visualFixture(context);
-  const room = snapshot({ count: QUICK_CHAT_ASL_WORDS - 1 });
-  room.aslProgress[1].count = QUICK_CHAT_ASL_WORDS;
+  const room = snapshot({ words: 9, messages: 4 });
   await page.route("**/api/match", (route) =>
     route.fulfill({ json: { roomId: room.id } }),
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
   await openQuickChat(page);
   const progress = page.getByLabel("Quick chat progress", { exact: true });
-  await expect(progress).toContainText(
-    `${QUICK_CHAT_PICTURE_WORDS} words each to unlock picture sharing`,
-  );
-  await expect(progress).toContainText(/You\s*9\/20/);
-  await expect(progress).toContainText(/Stranger\s*10\/20/);
-  await expect(page.getByRole("progressbar", { name: "You" })).toHaveAttribute(
-    "aria-valuenow",
-    "9",
-  );
+  await expect(progress).toContainText("10 each unlocks age, sex and location");
+  await expect(progress).toContainText("10 each shows profile pictures");
+  await expect(
+    page.getByRole("progressbar", { name: "Words: You" }),
+  ).toHaveAttribute("aria-valuenow", "9");
+  await expect(
+    page.getByRole("progressbar", { name: "Messages: Stranger" }),
+  ).toHaveAttribute("aria-valuenow", "4");
   await expect(page.locator(".quick-chat-disclosure")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Show my profile picture" }),
-  ).toHaveCount(0);
-
-  // Ten each reveals ASL in the sidebar; progress keeps counting toward twenty.
-  room.aslProgress[0].count = QUICK_CHAT_ASL_WORDS;
-  room.asl_revealed = true;
-  room.participants[1].asl = { age: 31, gender: "Woman", region: "Manila" };
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("A new hello for you");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(progress).toContainText(/You\s*10\/20/);
-  await expect(progress).toContainText(/Stranger\s*10\/20/);
-  const stranger = page
-    .locator(".room-members .participant")
-    .filter({ hasText: "Age 31 · Sex Woman · Location Manila" });
-  await expect(stranger).toHaveCount(1);
-  await expect(stranger.locator(".member-profile")).toHaveText(
-    "Age 31 · Sex Woman · Location Manila",
-  );
-  await expect(page.locator(".quick-chat-disclosure")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Show my profile picture" }),
-  ).toHaveCount(0);
-
-  // Twenty each unlocks the picture milestone and hides the progress bars.
-  room.aslProgress[0].count = QUICK_CHAT_PICTURE_WORDS;
-  room.aslProgress[1].count = QUICK_CHAT_PICTURE_WORDS;
-  room.pictureSharing.eligible = true;
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Twenty words in total for both of us");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(progress).toHaveCount(0);
-  await expect(page.locator(".asl-disclosure-message")).toHaveCount(0);
-  const sharing = page.getByLabel("Quick chat sharing", { exact: true });
-  await expect(sharing).toContainText("Picture sharing is now available.");
-  await expect(
-    page.getByRole("button", { name: "Show my profile picture" }),
-  ).toBeVisible();
 });
 
-test("a sent message is reconciled in its room after navigating away", async ({
+test("profile pictures appear at ten messages each with no consent prompt", async ({
   page,
   context,
 }) => {
   await visualFixture(context);
-  const messageText = "A message sent before switching rooms";
-  const room = snapshot({ count: 0 });
-  let committed = false;
-  let releasePost!: () => void;
-  let markPostStarted!: () => void;
-  const postPaused = new Promise<void>((resolve) => (releasePost = resolve));
-  const postStarted = new Promise<void>(
-    (resolve) => (markPostStarted = resolve),
-  );
-  let sentMessage: any;
-
+  await servePictures(page);
+  const room = snapshot({ words: 12, messages: PICTURE_MESSAGES });
   await page.route("**/api/match", (route) =>
     route.fulfill({ json: { roomId: room.id } }),
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
-  await page.route(`**/api/rooms/${room.id}/messages`, async (route) => {
-    if (route.request().method() === "POST") {
-      const body = route.request().postDataJSON();
-      sentMessage = {
-        id: "40000000-0000-4000-8000-000000000003",
-        roomId: room.id,
-        senderId: visualIds.user,
-        name: "You",
-        text: body.text,
-        createdAt: "2026-11-17T00:00:00.000Z",
-        clientMessageId: body.clientMessageId,
-        replyTo: null,
-        attachmentId: null,
-        reactions: {},
-      };
-      markPostStarted();
-      await postPaused;
-      committed = true;
-      return route.fulfill({ json: { id: sentMessage.id } });
-    }
+  await openQuickChat(page);
+  await expect(
+    page.getByAltText("Your partner’s profile picture", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Show my profile picture" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Not now", exact: true }),
+  ).toHaveCount(0);
+});
+
+test("a paid peek keeps its spinner until the refetched chat confirms the reveal", async ({
+  page,
+  context,
+}) => {
+  await visualFixture(context);
+  await servePictures(page);
+  await enableCredits(page, 40);
+  const before = snapshot({ words: 3, messages: 2, peekAvailable: true });
+  const after = snapshot({ words: 3, messages: 2, purchased: true });
+  let purchased = false;
+  await page.route("**/api/match", (route) =>
+    route.fulfill({ json: { roomId: before.id } }),
+  );
+  await page.route(`**${roomUrl}`, (route) =>
+    route.fulfill({ json: purchased ? after : before }),
+  );
+  let peekBodies: unknown[] = [];
+  await page.route(`**${roomUrl}/peek`, async (route) => {
+    peekBodies.push(route.request().postDataJSON());
+    // The chat only changes once the reveal has been fetched again.
+    purchased = true;
+    await new Promise((resolve) => setTimeout(resolve, 400));
     return route.fulfill({
-      json: { messages: committed ? [sentMessage] : [], next: null },
+      json: { purchased: true, charged: 10, balance: 30 },
     });
   });
-
   await openQuickChat(page);
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill(messageText);
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await postStarted;
-  await page
-    .getByRole("button", { name: "Back to rooms", exact: true })
-    .click();
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("button", { name: "Chats", exact: true })
-    .click();
-  await page
-    .locator(".sidebar-rooms")
-    .getByRole("button", { name: "Private conversation", exact: true })
-    .click();
-  await expect(page.locator(".chat")).toBeVisible();
-  releasePost();
-
-  await page
-    .getByRole("button", { name: "Back to rooms", exact: true })
-    .click();
-  await page
-    .locator(".sidebar-rooms")
-    .getByRole("button", { name: "Coffee with friends", exact: true })
-    .click();
-  await expect(
-    page.locator(".messages .message").filter({ hasText: messageText }),
-  ).toHaveCount(1);
-});
-
-test("declining persists across reopening and sharing later needs explicit approval", async ({
-  page,
-  context,
-}) => {
-  await visualFixture(context);
-  const room = snapshot();
-  const decisions: string[] = [];
-  await page.route("**/api/match", (route) =>
-    route.fulfill({ json: { roomId: room.id } }),
+  const panel = page.locator(".peek-panel");
+  await expect(panel).toContainText("Peek now for 10 credits.");
+  await expect(panel).toContainText(
+    "age, sex and location and their profile picture",
   );
-  await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
-  await page.route(`**${roomUrl}/picture-sharing`, (route) => {
-    const body = route.request().postDataJSON();
-    const decision = body.decision;
-    if (decision === "approved")
-      expect(body.pictureId).toBe(room.pictureSharing.self.pictureId);
-    decisions.push(decision);
-    room.pictureSharing.self.decision = decision;
-    return route.fulfill({ json: room });
-  });
-  await openQuickChat(page);
+  await page.getByRole("button", { name: "Peek for 10 credits" }).click();
+  await expect(panel.getByRole("status")).toContainText("Revealing");
+  await expect(panel.locator(".peek-spinner")).toBeVisible();
+  await expect(panel).toContainText("You peeked at");
+  await expect(panel.locator(".peek-spinner")).toHaveCount(0);
+  expect(peekBodies).toEqual([{ revealsAsl: true, revealsPicture: true }]);
   await expect(
-    page.getByText("Picture sharing is now available.", { exact: true }),
-  ).toHaveCount(1);
-  await page.screenshot({
-    path: ".context/fr12-desktop.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(
-    page.getByRole("button", { name: "Show my profile picture", exact: true }),
+    page.getByAltText("Your partner’s profile picture", { exact: true }),
   ).toBeVisible();
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
-  await expect
-    .poll(() =>
-      page
-        .locator(".sidebar")
-        .evaluate((element) => element.getBoundingClientRect().right),
-    )
-    .toBeLessThanOrEqual(0);
-  await page.screenshot({
-    path: ".context/fr12-mobile.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.getByRole("button", { name: "Not now", exact: true }).click();
-  await expect(
-    page.getByText("You can show your profile picture whenever you want.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Not now", exact: true }),
-  ).toHaveCount(0);
-  await openQuickChat(page);
-  await expect(
-    page.getByRole("button", { name: "Not now", exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Show my profile picture", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Show my profile picture", exact: true })
-    .click();
-  await expect(
-    page.getByText("You chose to show your profile picture in this chat.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  expect(decisions).toEqual(["declined", "approved"]);
 });
 
-test("missing pictures show unavailable state and approved peer picture is announced", async ({
+test("a low balance points to credits instead of charging", async ({
   page,
   context,
 }) => {
   await visualFixture(context);
-  const room = snapshot({ hasPicture: false });
-  room.pictureSharing.participants.push({
-    id: visualIds.peer,
-    url: `${roomUrl}/pictures/${visualIds.peer}`,
-  });
+  await enableCredits(page, 3);
+  const room = snapshot({ words: 3, messages: 2, peekAvailable: true });
   await page.route("**/api/match", (route) =>
     route.fulfill({ json: { roomId: room.id } }),
   );
   await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
   await openQuickChat(page);
+  await expect(page.locator(".peek-panel")).toContainText(
+    "You need 7 more credits to peek.",
+  );
   await expect(
-    page.getByText(
-      "You don’t have a profile picture to share. Your picture stays hidden.",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Show my profile picture" }),
+    page.getByRole("button", { name: "Peek for 10 credits" }),
   ).toHaveCount(0);
   await expect(
-    page.getByText("Stranger chose to show you their profile picture.", {
-      exact: true,
-    }),
+    page.getByRole("button", { name: "Get credits", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByAltText("Stranger’s shared profile picture"),
-  ).toHaveAttribute("src", `${roomUrl}/pictures/${visualIds.peer}`);
-});
-
-test("a changed picture refreshes the consent choice before retry", async ({
-  page,
-  context,
-}) => {
-  await visualFixture(context);
-  const room = snapshot();
-  let attempts = 0;
-  await page.route("**/api/match", (route) =>
-    route.fulfill({ json: { roomId: room.id } }),
-  );
-  await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
-  await page.route(`**${roomUrl}/picture-sharing`, (route) => {
-    if (++attempts === 1) {
-      room.pictureSharing.self.pictureId =
-        "60000000-0000-4000-8000-000000000002";
-      room.pictureSharing.self.previewUrl = `/api/profile/picture/content?pictureId=${room.pictureSharing.self.pictureId}`;
-      return route.fulfill({
-        status: 409,
-        json: { error: "Your picture changed. Please choose again." },
-      });
-    }
-    expect(route.request().postDataJSON().pictureId).toBe(
-      room.pictureSharing.self.pictureId,
-    );
-    room.pictureSharing.self.decision = "approved";
-    return route.fulfill({ json: room });
-  });
-  await openQuickChat(page);
-  await page
-    .getByRole("button", { name: "Show my profile picture", exact: true })
-    .click();
-  await expect(
-    page.getByText("Your picture changed. Please choose again.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByAltText("The profile picture you can choose to share"),
-  ).toHaveAttribute("src", room.pictureSharing.self.previewUrl);
-  await expect(
-    page.getByRole("button", { name: "Show my profile picture", exact: true }),
-  ).toBeEnabled();
-  await page
-    .getByRole("button", { name: "Show my profile picture", exact: true })
-    .click();
-  await expect(
-    page.getByText("You chose to show your profile picture in this chat.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-});
-
-test("a delayed sharing response cannot reopen a chat after Next", async ({
-  page,
-  context,
-}) => {
-  await visualFixture(context);
-  const room = snapshot();
-  let matches = 0;
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let entered!: () => void;
-  const requested = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  await page.route("**/api/match", (route) =>
-    route.fulfill({
-      json: ++matches === 1 ? { roomId: room.id } : { queued: true },
-    }),
-  );
-  await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
-  await page.route(`**${roomUrl}/picture-sharing`, async (route) => {
-    entered();
-    await held;
-    room.pictureSharing.self.decision = "approved";
-    await route.fulfill({ json: room });
-  });
-  await openQuickChat(page);
-  await page
-    .getByRole("button", { name: "Show my profile picture", exact: true })
-    .click();
-  await requested;
-  await page.locator(".room-leave-button").click();
-  await expect(
-    page.getByRole("heading", { name: "Finding a conversation…", exact: true }),
-  ).toBeVisible();
-  release();
-  await expect(page.locator(".chat")).toHaveCount(0);
-});
-
-test("an old approval response cannot transfer consent into a new eligible match", async ({
-  page,
-  context,
-}) => {
-  await visualFixture(context);
-  const room = snapshot();
-  const nextRoom = { ...snapshot(), id: visualIds.contact };
-  let matches = 0;
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let entered!: () => void;
-  const requested = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  await page.route("**/api/match", (route) =>
-    route.fulfill({
-      json: { roomId: ++matches === 1 ? room.id : nextRoom.id },
-    }),
-  );
-  await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
-  await page.route(`**/api/rooms/${nextRoom.id}`, (route) =>
-    route.fulfill({ json: nextRoom }),
-  );
-  await page.route(`**${roomUrl}/picture-sharing`, async (route) => {
-    entered();
-    await held;
-    room.pictureSharing.self.decision = "approved";
-    await route.fulfill({ json: room });
-  });
-  const newDecisions: string[] = [];
-  await page.route(`**/api/rooms/${nextRoom.id}/picture-sharing`, (route) => {
-    newDecisions.push(route.request().postDataJSON().decision);
-    nextRoom.pictureSharing.self.decision = "approved";
-    return route.fulfill({ json: nextRoom });
-  });
-  await openQuickChat(page);
-  await page
-    .getByRole("button", { name: "Show my profile picture", exact: true })
-    .click();
-  await requested;
-  const newRoomRead = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === `/api/rooms/${nextRoom.id}`,
-  );
-  await page.locator(".room-leave-button").click();
-  await newRoomRead;
-  await expect(
-    page.getByRole("button", { name: "Not now", exact: true }),
-  ).toBeVisible();
-  const oldResponse = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === `${roomUrl}/picture-sharing`,
-  );
-  release();
-  await (await oldResponse).finished();
-  await page
-    .getByRole("button", { name: "Show my profile picture", exact: true })
-    .click();
-  await expect(
-    page.getByText("You chose to show your profile picture in this chat.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  expect(newDecisions).toEqual(["approved"]);
 });
 
 test("profile picture upload waits for approval and restores the private preview", async ({

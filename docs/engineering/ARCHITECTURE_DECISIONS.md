@@ -9,6 +9,8 @@ Initialized **2026-11-12**, adapting the Guardian ADR template. Existing applica
 | AD-03 | Documented heartbeats, disconnected fallback and lifecycle timers | [SRS decisions](../../SRS.md#architecture-decisions), [App](../../src/App.tsx), [realtime client](../../src/realtime.ts). The active-room refresh combines triggers, skips in-flight polls and backs off on transient errors. See the [browser coverage](../../tests/browser/chat-refresh.spec.ts). |
 | AD-04 | Separate Cloudflare production, staging and PR Preview resources from Celld local/optional fleet configurations | [Cloudflare](../../wrangler.cloudflare.jsonc), [Preview setup](../../README.md#pull-request-previews), [Celld](../../wrangler.jsonc). PR Previews share staging D1/R2 and use isolated Durable Object namespaces; IMP-09–IMP-11 remain open. |
 | AD-05 | Reuse authorities/contracts and keep changes proportionate | [SRS decisions](../../SRS.md#architecture-decisions). Record consequential authorized changes with alternatives, migration/rollback and security/recovery evidence. |
+| ADR-05 | Credit wallet and append-only ledger in D1, mutated only by AppCoordinator, behind a sandbox-only payment seam (FR-13, BE-08, AD-06) | [Decision](#adr-05-credit-wallet-and-ledger-owned-by-appcoordinator), [migration 0006](../../celld/migrations/0006_credits.sql), [wallet](../../celld/features/credits/wallet.ts) |
+| ADR-06 | Profile reveal at distinct messages; per-chat picture consent removed; peek is one-sided (FR-12) | [Decision](#adr-06-message-based-profile-reveal-and-removal-of-per-chat-picture-consent), [Room](../../celld/durable-objects/room.ts) |
 
 These link to the existing baseline rather than granting new approval. For future application decisions, retain affected FR/BE/AD IDs and use the [bundled ADR template](../../.agents/skills/engineering-srs-guardian/assets/templates/ARCHITECTURE_DECISIONS.md). Record the problem, constraints, options, rationale, tradeoffs, contracts/state, operational risks, validation and revisit criteria; distinguish proposed from accepted choices.
 
@@ -95,3 +97,44 @@ Historical final readiness review applied current owner eligibility to ASL and f
 - **Recovery/rollback:** Revert the preview block and package script to restore the previous deployment configuration. No data migration, resource creation, secret upload or deployment was performed.
 - **Evidence:** Attachment `.context/attachments/FjuUkt/pasted_text_2026-11-17_14-10-49.txt` showed `pnpm run build` and TypeScript checks passing before `npx wrangler preview` failed for missing `previews`. Local typecheck/build and Wrangler config dry-run are recorded in the implementation matrix; they do not prove a remote Preview deploy or runtime behavior.
 - **Revisit:** Provision dedicated Preview D1/R2 if PR code must have data isolation stronger than synthetic shared staging resources.
+
+## ADR-05: Credit wallet and ledger owned by AppCoordinator
+
+- **Date/status:** 2026-11-22 / ACCEPTED under the user's credits-economy request. The feature ships disabled (`credits_enabled=false`). No live payment gateway is chosen.
+- **Problem:** Charoo had no wallet, ledger or payment code. The reconnect price was a `0` placeholder. Three paid features (peek, contact storage, reconnect) and earned grants need idempotent balance changes that cannot double-charge, and a payment seam that does not commit to a gateway.
+- **Drivers:** A single authority for balances (BE-02); no route mutates credits directly; replays from retries, duplicate webhooks and queue redelivery are no-ops; a reversible rollout; no payment credentials in configuration.
+- **Choice:** Add `credit_wallets` (current balance and streak), an append-only `credit_entries` ledger, `credit_orders` for purchases, and `profile_peeks` for one-sided reveals. Every balance change is a statement inside one AppCoordinator command and one atomic D1 batch. Idempotency comes from the ledger's unique `entry_key`. Room activity rewards are outbox effects delivered by the queue, which calls AppCoordinator. Payments use a `CreditPaymentProvider` interface. Only a non-production sandbox implements it.
+
+| Alternative | Assessment |
+| --- | --- |
+| Durable Object-local wallet per user | Rejected: splits balance authority from the D1 global records used by contacts, requests and settings, and complicates atomic debits across them. |
+| Mutable balance column without a ledger | Rejected: no audit trail and no reconciliation check after retries. |
+| Pick a payment SDK now | Rejected: no gateway or pricing has been agreed. It would add credentials and a dependency before the seam is proven. |
+| Call AppCoordinator inline from the Room message path | Rejected: couples message commits to ledger availability. Queued jobs keep the message path unchanged. |
+
+- **Boundaries:** The overdraft guard is `CHECK(balance >= 0)`, which aborts the whole batch, plus a balance pre-check in the command. The guard cannot branch inside a batch, so a row-count check is not used. Webhooks authenticate by HMAC over the raw body. `CREDITS_WEBHOOK_SECRET` is a Worker secret, never a `vars` entry (BE-04). The sandbox requires `CREDITS_SANDBOX=true`, is unavailable when `NODE_ENV=production`, and needs the webhook secret.
+- **Affected contracts:** Settings keys `credits_*`, `quickchat_*` and `reconnect_price`; `CREDIT_PACKS` and credit schemas; `/api/credits*`, `/api/rooms/:roomId/peek`, `/api/credits/webhook/:provider`, `/api/credits/sandbox/confirm`; `/api/me.credits`; `social.create` and `social.respond` gates. The webhook route skips session, origin and CSRF checks and relies only on the signature.
+- **Migration and rollback:** `0006_credits.sql` is additive and must be applied before production traffic. Rollback is `credits_enabled=false`, which restores free reconnect and unlimited contacts. The ledger is retained, and application rollback must keep migration 0006 applied. Verify bonuses are not retroactive for accounts verified before the flag is enabled.
+- **Security and recovery:** Sandbox confirmation requires the order owner's session and the same signed settlement path as a real webhook. Settlement is at least once and idempotent. Activity rewards retry through the queue. Pending orders expire during cleanup. The sandbox adapter must never be enabled in production.
+- **Risks:** Pack prices are provisional placeholders. Insufficient funds return 402, which is a deliberate choice. No refund, chargeback or admin-adjustment UI exists; `ADMIN_ADJUST` is reserved in the ledger.
+- **Validation:** [tests/credits.test.ts](../../tests/credits.test.ts) covers grants, daily streaks, guest and disabled-flag denial, peek, contact caps, reconnect charge and expiry, webhook replay and signature, sandbox refusal in production, ledger reconciliation and append-only triggers. Results are recorded in the [matrix](IMPLEMENTATION_MATRIX.md#verification-gates-and-evidence-log).
+- **Revisit:** When a payment gateway, refunds, pack pricing in settings, or admin credit adjustments are authorized.
+
+## ADR-06: Message-based profile reveal and removal of per-chat picture consent
+
+- **Date/status:** 2026-11-22 / ACCEPTED under the user's quick-chat product change. Supersedes the consent and word-threshold parts of ADR-01 and the picture-consent parts of PD-01 and ADR-04 for quick chat only. Group-room avatar choice (ADR-04) is unchanged.
+- **Problem:** The profile reveal waited for twenty words each and then required a per-chat approval prompt. The user asked for reveal at ten distinct messages each and for the prompt to go. Removing the prompt removes an explicit consent step, so disclosure must move to the point where a user chooses to enter quick chat.
+- **Choice:** Room counts two per-participant values in one fingerprint namespace. Words are capped at 20. Distinct letter-bearing messages are capped at 50. A duplicate message counts toward neither. The ASL reveal is at 10 words each, and the profile reveal is at 10 distinct messages each. Both thresholds are settings. The profile reveal shows each participant's current approved picture. No decision is stored. The quick-chat entry screen states that the profile picture is shown after the milestone. A paid peek (FR-13) is the only other early reveal, and it is one-sided.
+
+| Alternative | Assessment |
+| --- | --- |
+| Keep a consent prompt at the message milestone | Rejected by the requested change. |
+| Count every send toward messages | Rejected: a single user could reach the milestone by spamming. |
+| Pooled message count across both participants | Rejected: each participant's contribution must be counted separately, as in FR-12. |
+| Reveal pictures at the word milestone | Rejected: words alone do not show participation in the same way. |
+
+- **Boundaries and consequences:** Replacing a picture now shows the owner's new approved picture at the milestone without a new approval. Image URLs still bind to a specific picture, and `picture.download` still rechecks access and picture identity. The `picture.share` command and `POST /api/rooms/:roomId/picture-sharing` are removed. Snapshot fields change: `pictureSharing` becomes `pictureReveal`, and `pictureProgress`, `thresholds`, `caps` and `peek` are added. Clients built against the old shape need the matching frontend.
+- **Migration and rollback:** Room participants gain `message_count` and `counts_version`. Older counts are recounted from encrypted history in one pass. No D1 migration is involved. Rolling back to the old Room code would read a removed `picture_decision` field, so rollback requires the frontend and Room deployed together.
+- **Security:** Disclosure is the mitigation for removing consent. The entry-screen line is part of acceptance (FR-12). Image routes, R2 boundaries and expiry handling are unchanged.
+- **Validation:** [tests/fr12.test.ts](../../tests/fr12.test.ts) covers the milestones, counting, backfill, threshold reconfiguration, consent-route removal, leave/Next and access. [tests/browser/disclosure.spec.ts](../../tests/browser/disclosure.spec.ts) and [disclosure-responsive.spec.ts](../../tests/browser/disclosure-responsive.spec.ts) cover the bars, reveal and peek states.
+- **Revisit:** If product wants to reintroduce per-chat opt-out, withdrawal of an approved picture, or different message qualification.

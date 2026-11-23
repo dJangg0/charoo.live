@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fixture, matchableGuest } from "./runtime";
+import { fixture, matchableGuest, reachProfileMilestone } from "./runtime";
 import { unwrap } from "../celld/shared/errors";
 import { roomStub, iso } from "../celld/shared/data";
 import { hash } from "../celld/shared/crypto";
@@ -578,6 +578,7 @@ describe("Durable authorities and coordination", () => {
     await matcher.match(a.actor);
     const match = unwrap(await matcher.match(b.actor));
     if (!("roomId" in match)) throw new Error("Expected match");
+    await reachProfileMilestone(roomStub(f.env, match.roomId), a, b);
     const req = unwrap(
       await f.app.command(a.actor, "social.create", {
         kind: "CONTACT",
@@ -970,6 +971,7 @@ describe("Durable authorities and coordination", () => {
     await matcher.match(a.actor);
     const match = unwrap(await matcher.match(b.actor));
     if (!("roomId" in match)) throw new Error("Expected match");
+    await reachProfileMilestone(roomStub(f.env, match.roomId), a, b);
     const req = unwrap(
       await f.app.command(a.actor, "social.create", {
         kind: "CONTACT",

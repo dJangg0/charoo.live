@@ -36,6 +36,7 @@ import {
   pictureScanRequest,
 } from "../features/profile-pictures/routes";
 import { providerRoutes } from "../features/providers/routes";
+import { creditRoutes, compactCredits } from "../features/credits/routes";
 
 export const app = new Hono<HttpEnv>();
 app.use("*", async (c, next) => {
@@ -50,6 +51,8 @@ app.use("*", async (c, next) => {
     )
   )
     return next();
+  // Payment webhooks are server-to-server: no session, origin or CSRF checks. The provider signature is the authentication.
+  if (/^\/api\/credits\/webhook\/[a-z-]+$/.test(c.req.path)) return next();
   const origin = c.req.header("Origin");
   // Local admin tools may omit a session and browser origin. A trusted
   // network guards access; authenticated sessions still require CSRF tokens.
@@ -127,16 +130,18 @@ app.use("*", async (c, next) => {
 });
 app.get("/health", (c) => c.json({ status: "ok" }));
 app.get("/api/health", (c) => c.json({ status: "ok" }));
-app.get("/api/me", async (c) =>
-  c.json({
+app.get("/api/me", async (c) => {
+  const current = await settings(c.env);
+  return c.json({
     user: publicUser(
       c.get("user"),
       (await hub(c.env, actor(c).userId).presence()).status,
     ),
     csrf: c.get("session").csrf,
-    settings: await settings(c.env),
-  }),
-);
+    settings: current,
+    credits: await compactCredits(c.env, c.get("user"), current),
+  });
+});
 app.post(
   "/api/presence",
   body(
@@ -181,6 +186,7 @@ app.all(
   pictureScanRequest,
 );
 providerRoutes(app);
+creditRoutes(app);
 app.all("/api/media/:id/scan/:attempt/:operation", scanRequest);
 app.notFound((c) =>
   c.json({ error: "Endpoint unavailable", requestId: c.get("requestId") }, 404),

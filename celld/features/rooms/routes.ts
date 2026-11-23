@@ -4,7 +4,6 @@ import {
   roomSchema,
   messageSchema,
   avatarChoiceSchema,
-  pictureSharingDecisionSchema,
 } from "@charoo/contracts";
 import {
   all,
@@ -145,11 +144,6 @@ export function roomRoutes(app: Hono<HttpEnv>) {
       .then(unwrap);
   app.get("/api/rooms/:roomId", async (c) =>
     c.json(await command(c, "snapshot")),
-  );
-  app.post(
-    "/api/rooms/:roomId/picture-sharing",
-    body(pictureSharingDecisionSchema),
-    async (c) => c.json(await command(c, "picture.share")),
   );
   app.get("/api/rooms/:roomId/messages", async (c) =>
     c.json(

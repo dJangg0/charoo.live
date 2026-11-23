@@ -1,11 +1,14 @@
 import { z } from "zod";
 export const QUICK_CHAT_SEARCH_TIMEOUT_MS = 2 * 60 * 1000;
-// Each participant's committed words in a quick chat unlock two milestones:
-// permitted ASL at ten words each, then profile-picture sharing at twenty.
+// Quick-chat milestones. Each participant's committed words unlock permitted
+// ASL (default ten words each, admin-configurable). Each participant's
+// distinct committed messages unlock the profile reveal (default ten messages
+// each, admin-configurable). Thresholds live in settings; these are defaults.
 export const QUICK_CHAT_ASL_WORDS = 10;
-export const QUICK_CHAT_PICTURE_WORDS = 20;
-// Per-participant counts stop at the highest milestone.
-export const QUICK_CHAT_WORD_CAP = QUICK_CHAT_PICTURE_WORDS;
+// Per-participant word counts stop at this cap.
+export const QUICK_CHAT_WORD_CAP = 20;
+// Per-participant distinct-message counts stop at this cap.
+export const QUICK_CHAT_MESSAGE_CAP = 50;
 export const roomTypes = [
   "AVAILABLE_TONIGHT",
   "SHARED_GROUP",
@@ -190,7 +193,20 @@ export const defaultSettings = {
   video_enabled: false,
   AI_assistant_enabled: false,
   quickchat_rematch_cooldown_minutes: 5,
-  reconnect_price: 0,
+  quickchat_asl_word_threshold: QUICK_CHAT_ASL_WORDS,
+  quickchat_picture_message_threshold: 10,
+  reconnect_price: 3,
+  credits_enabled: false,
+  credits_verify_bonus: 50,
+  credits_daily_base: 5,
+  credits_daily_streak_bonus: 2,
+  credits_daily_streak_max_days: 7,
+  credits_activity_milestone_reward: 3,
+  credits_peek_price: 10,
+  credits_contact_slot_base: 10,
+  credits_contact_slot_pack: 5,
+  credits_contact_slot_price: 15,
+  credits_contact_slot_max: 50,
 };
 export const settingsSchema = z.object({
   guest_access_enabled: z.boolean(),
@@ -209,7 +225,28 @@ export const settingsSchema = z.object({
   video_enabled: z.boolean(),
   AI_assistant_enabled: z.boolean(),
   quickchat_rematch_cooldown_minutes: z.number().int().min(0).max(1440),
-  reconnect_price: z.literal(0),
+  quickchat_asl_word_threshold: z
+    .number()
+    .int()
+    .min(2)
+    .max(QUICK_CHAT_WORD_CAP),
+  quickchat_picture_message_threshold: z
+    .number()
+    .int()
+    .min(1)
+    .max(QUICK_CHAT_MESSAGE_CAP),
+  reconnect_price: z.number().int().min(0).max(100),
+  credits_enabled: z.boolean(),
+  credits_verify_bonus: z.number().int().min(0).max(100000),
+  credits_daily_base: z.number().int().min(0).max(10000),
+  credits_daily_streak_bonus: z.number().int().min(0).max(10000),
+  credits_daily_streak_max_days: z.number().int().min(1).max(365),
+  credits_activity_milestone_reward: z.number().int().min(0).max(10000),
+  credits_peek_price: z.number().int().min(0).max(10000),
+  credits_contact_slot_base: z.number().int().min(0).max(1000),
+  credits_contact_slot_pack: z.number().int().min(1).max(100),
+  credits_contact_slot_price: z.number().int().min(0).max(100000),
+  credits_contact_slot_max: z.number().int().min(1).max(1000),
 });
 export type Settings = typeof defaultSettings;
 export { z };
@@ -231,7 +268,43 @@ export const avatarChoiceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("avatar"), id: z.enum(AVATAR_IDS) }),
 ]);
 export type AvatarChoice = z.infer<typeof avatarChoiceSchema>;
-export const pictureSharingDecisionSchema = z.discriminatedUnion("decision", [
-  z.object({ decision: z.literal("approved"), pictureId: z.string().uuid() }),
-  z.object({ decision: z.literal("declined") }),
-]);
+
+// Credits economy (FR-13). Pack prices are contract data, not admin settings:
+// currency and gateway configuration are not a generic number input.
+// Provisional placeholder prices until a real gateway and pricing are agreed.
+export const CREDIT_PACKS = [
+  { id: "pack-100", credits: 100, amountMinor: 500, currency: "USD" },
+  { id: "pack-300", credits: 300, amountMinor: 1200, currency: "USD" },
+  { id: "pack-1000", credits: 1000, amountMinor: 3500, currency: "USD" },
+] as const;
+export type CreditPack = (typeof CREDIT_PACKS)[number];
+export const creditPackIds = CREDIT_PACKS.map((pack) => pack.id) as [
+  CreditPack["id"],
+  ...CreditPack["id"][],
+];
+export const CREDIT_ENTRY_KINDS = [
+  "GRANT_VERIFY",
+  "GRANT_DAILY",
+  "GRANT_ACTIVITY",
+  "TOPUP",
+  "SPEND_PEEK",
+  "SPEND_SLOTS",
+  "SPEND_RECONNECT",
+  "ADMIN_ADJUST",
+] as const;
+export type CreditEntryKind = (typeof CREDIT_ENTRY_KINDS)[number];
+export const creditOrderSchema = z.object({
+  packId: z.enum(creditPackIds),
+});
+// The client confirms exactly what the pre-flight showed; the server refuses
+// the charge if the reveal changed since then.
+export const peekSchema = z.object({
+  revealsAsl: z.boolean(),
+  revealsPicture: z.boolean(),
+});
+export const slotPurchaseSchema = z.object({
+  clientOperationId: z
+    .string()
+    .uuid()
+    .transform((value) => value.toLowerCase()),
+});

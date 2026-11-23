@@ -46,13 +46,14 @@ async function pictures(page: Page) {
 
 for (const viewport of sizes) {
   const size = `${viewport.width}x${viewport.height}`;
-  test(`picture consent and chat remain usable at ${size}`, async ({
+  test(`quick-chat milestones, pictures and peek stay usable at ${size}`, async ({
     page,
     context,
   }) => {
     await page.setViewportSize(viewport);
     await visualFixture(context);
     await pictures(page);
+    const pictureId = "60000000-0000-4000-8000-000000000001";
     const room = {
       id: visualIds.group,
       type: "STRANGER",
@@ -69,17 +70,17 @@ for (const viewport of sizes) {
         },
       ],
       aslProgress: [
-        { id: visualIds.user, count: 20 },
-        { id: visualIds.peer, count: 20 },
+        { id: visualIds.user, count: 12 },
+        { id: visualIds.peer, count: 12 },
       ],
-      pictureSharing: {
+      pictureProgress: [
+        { id: visualIds.user, count: 10 },
+        { id: visualIds.peer, count: 10 },
+      ],
+      thresholds: { aslWords: 10, pictureMessages: 10 },
+      caps: { words: 20, messages: 50 },
+      pictureReveal: {
         eligible: true,
-        self: {
-          hasPicture: true,
-          decision: "pending",
-          pictureId,
-          previewUrl: `/api/profile/picture/content?pictureId=${pictureId}`,
-        },
         participants: [
           {
             id: visualIds.peer,
@@ -87,76 +88,34 @@ for (const viewport of sizes) {
           },
         ],
       },
+      peek: {
+        price: 10,
+        purchased: false,
+        available: false,
+        revealsAsl: false,
+        revealsPicture: false,
+      },
     };
     await page.route("**/api/match", (route) =>
       route.fulfill({ json: { roomId: room.id } }),
     );
     await page.route(`**${roomUrl}`, (route) => route.fulfill({ json: room }));
-    await page.route(`**${roomUrl}/picture-sharing`, (route) => {
-      const input = route.request().postDataJSON();
-      if (input.decision === "approved")
-        expect(input.pictureId).toBe(pictureId);
-      room.pictureSharing.self.decision = input.decision;
-      return route.fulfill({ json: room });
-    });
     await page.goto("/");
     await navigate(page, "Quick chat");
     await page.getByRole("button", { name: "Find a conversation" }).click();
-    const card = page.getByLabel("Quick chat sharing", { exact: true });
-    await expect(card).toContainText("Picture sharing is now available.");
-    await noOverflow(page);
-    expect(await card.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(
-      true,
-    );
-    const approve = page.getByRole("button", {
-      name: "Show my profile picture",
-      exact: true,
-    });
-    const decline = page.getByRole("button", { name: "Not now", exact: true });
-    for (const control of [approve, decline]) {
-      const bounds = await control.boundingBox();
-      expect(bounds!.height).toBeGreaterThanOrEqual(44);
-      expect(bounds!.width).toBeGreaterThanOrEqual(44);
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
-    }
-    await expect(
-      page.getByAltText("The profile picture you can choose to share"),
-    ).toHaveCSS("object-fit", "contain");
-    const shared = page.getByAltText("Stranger’s shared profile picture");
-    await expect(shared).toHaveJSProperty("naturalWidth", 640);
-    const dimensions = await shared.boundingBox();
-    expect(dimensions!.width / dimensions!.height).toBeCloseTo(4, 0);
-    await expect
-      .poll(async () => {
-        const composer = await page.locator(".composer").boundingBox();
-        return composer!.y + composer!.height;
-      })
-      .toBeLessThanOrEqual(viewport.height + 1);
-    expect(
-      await page.locator(".messages").evaluate((e) => e.clientHeight),
-    ).toBeGreaterThan(32);
-    await approve.scrollIntoViewIfNeeded();
-    await expect(approve).toBeInViewport();
-    if ([390, 1440].includes(viewport.width))
-      await page.screenshot({
-        path: `.context/fr12-responsive-${size}.png`,
-        animations: "disabled",
-      });
-    await decline.click();
+    const card = page.getByLabel("Quick chat disclosure", { exact: true });
     await expect(card).toContainText(
-      "You can show your profile picture whenever you want.",
+      "Profile pictures are shown in this chat.",
     );
-    await approve.click();
-    await expect(card).toContainText(
-      "You chose to show your profile picture in this chat.",
-    );
-    await page
-      .getByRole("textbox", { name: "Message", exact: true })
-      .fill("A message after sharing");
     await expect(
-      page.getByRole("button", { name: "Send message", exact: true }),
-    ).toBeInViewport();
+      page.getByLabel("Quick chat progress", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByAltText("Your partner’s profile picture", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Show my profile picture" }),
+    ).toHaveCount(0);
     await noOverflow(page);
   });
 

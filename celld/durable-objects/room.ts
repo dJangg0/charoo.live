@@ -4,6 +4,7 @@ import {
 } from "../features/profile-pictures/state";
 import {
   avatarChoiceSchema,
+  joinIdentitySchema,
   type AvatarId,
   type Settings,
   QUICK_CHAT_WORD_CAP,
@@ -58,7 +59,13 @@ type Participant = {
   removed_at?: string | null;
   // Group rooms: the avatar the member chose on joining.
   avatar?: AvatarRef;
+  // How the member entered this room: with the profile, or as a guest with a room name.
+  identity?: JoinedIdentity;
 };
+type JoinedIdentity = { mode: "profile" } | { mode: "guest"; name: string };
+// The name other members see for a participant or join request.
+const guestName = (identity?: JoinedIdentity) =>
+  identity?.mode === "guest" ? identity.name : undefined;
 type AvatarRef =
   | { kind: "picture"; pictureId: string }
   | { kind: "avatar"; id: AvatarId };
@@ -69,6 +76,7 @@ type JoinRequest = {
   id: string;
   user_id: string;
   avatar?: AvatarRef;
+  identity?: JoinedIdentity;
   status: "PENDING" | "APPROVED" | "REJECTED";
   reason?: string | null;
   created_at: string;
@@ -130,6 +138,15 @@ export class Room extends DurableObject<Env> {
    CREATE TABLE IF NOT EXISTS charoo_calls(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS charoo_join_requests(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS charoo_outbox(id TEXT PRIMARY KEY,kind TEXT NOT NULL,payload TEXT NOT NULL);`);
+    // Additive: the guest nickname a message was sent under, kept with the message.
+    if (
+      !this.rows("PRAGMA table_info(charoo_messages)").some(
+        (c) => c.name === "guest_name",
+      )
+    )
+      ctx.storage.sql.exec(
+        "ALTER TABLE charoo_messages ADD COLUMN guest_name TEXT",
+      );
   }
   private rows<T = any>(sql: string, ...params: any[]): T[] {
     return this.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
@@ -188,7 +205,7 @@ export class Room extends DurableObject<Env> {
       .filter((j) => j.user_id === userId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
   }
-  private add(id: string, avatar?: AvatarRef) {
+  private add(id: string, avatar?: AvatarRef, identity?: JoinedIdentity) {
     this.saveParticipant({
       user_id: id,
       state: "JOINED",
@@ -202,6 +219,7 @@ export class Room extends DurableObject<Env> {
       read_at: null,
       presence_until: Date.now() + 90000,
       ...(avatar ? { avatar } : {}),
+      ...(identity ? { identity } : {}),
     });
   }
   // A join-time choice. A picture choice pins the owner's current approved picture.
@@ -217,6 +235,34 @@ export class Room extends DurableObject<Env> {
     const picture = await currentPicture(env, userId);
     requireThat(picture, 409, "Add a profile picture or choose an avatar");
     return { kind: "picture", pictureId: picture.id };
+  }
+  // Guests get a room name and a generated avatar, never the profile picture.
+  private async joinAvatar(
+    env: Env,
+    userId: string,
+    choice: unknown,
+    identity: JoinedIdentity,
+  ): Promise<AvatarRef> {
+    if (identity.mode === "profile") return this.avatarRef(env, userId, choice);
+    const parsed = avatarChoiceSchema.parse(
+      choice ?? { kind: "avatar", id: DEFAULT_AVATAR },
+    );
+    requireThat(
+      parsed.kind === "avatar",
+      400,
+      "Guests use a generated avatar, not a profile picture",
+    );
+    return { kind: "avatar", id: parsed.id };
+  }
+  private joinIdentity(choice: unknown): JoinedIdentity {
+    const parsed = joinIdentitySchema.parse(choice ?? { mode: "profile" });
+    if (parsed.mode === "profile") return { mode: "profile" };
+    return {
+      mode: "guest",
+      name:
+        parsed.nickname ??
+        `Guest ${crypto.randomUUID().slice(0, 4).toUpperCase()}`,
+    };
   }
   // What other members may see: the chosen avatar, or a picture only while it is still approved for its owner.
   private async avatarView(p: Participant) {
@@ -553,9 +599,15 @@ export class Room extends DurableObject<Env> {
       return r;
     });
   }
-  async hasParticipant(id: string) {
+  // profileOnly: a guest entry is not a profile, so it cannot send or receive account-level requests.
+  async hasParticipant(id: string, profileOnly = false) {
     return result(() => {
       this.membership(id);
+      requireThat(
+        !profileOnly || this.participant(id)?.identity?.mode !== "guest",
+        403,
+        "Guests cannot send or receive contact requests in this room",
+      );
       return true;
     });
   }
@@ -638,10 +690,11 @@ export class Room extends DurableObject<Env> {
         if (r.type === "AVAILABLE_TONIGHT") {
           // Joined and removed members do not choose again, so their input is not validated.
           const before = this.participant(u.id);
+          const identity = this.joinIdentity(input.identity);
           const avatar =
             before?.state === "JOINED" || before?.state === "REMOVED"
               ? undefined
-              : await this.avatarRef(env, u.id, input.avatar);
+              : await this.joinAvatar(env, u.id, input.avatar, identity);
           this.ctx.storage.transactionSync(() => {
             this.open();
             const p = this.participant(u.id);
@@ -654,11 +707,14 @@ export class Room extends DurableObject<Env> {
             );
             if (p) {
               // Only a member coming back from LEFT takes the new choice; a joined member keeps theirs.
-              if (p.state !== "JOINED" && avatar) p.avatar = avatar;
+              if (p.state !== "JOINED" && avatar) {
+                p.avatar = avatar;
+                p.identity = identity;
+              }
               p.state = "JOINED";
               p.presence_until = Date.now() + 90000;
               this.saveParticipant(p);
-            } else this.add(u.id, avatar);
+            } else this.add(u.id, avatar, identity);
             this.changed();
             this.event("room.changed");
           });
@@ -679,13 +735,20 @@ export class Room extends DurableObject<Env> {
           );
         if (existing?.state === "JOINED") return { id: r.id };
         if (existing?.state === "LEFT") {
-          const avatar = await this.avatarRef(env, u.id, input.avatar);
+          const identity = this.joinIdentity(input.identity);
+          const avatar = await this.joinAvatar(
+            env,
+            u.id,
+            input.avatar,
+            identity,
+          );
           this.ctx.storage.transactionSync(() => {
             this.open();
             const p = this.participant(u.id)!;
             p.state = "JOINED";
             p.presence_until = Date.now() + 90000;
             p.avatar = avatar;
+            p.identity = identity;
             this.saveParticipant(p);
             this.changed();
             this.event("room.changed");
@@ -705,7 +768,7 @@ export class Room extends DurableObject<Env> {
         if (mine?.status === "APPROVED") {
           this.ctx.storage.transactionSync(() => {
             this.open();
-            this.add(u.id, mine.avatar);
+            this.add(u.id, mine.avatar, mine.identity);
             this.changed();
             this.event("room.changed");
           });
@@ -713,7 +776,8 @@ export class Room extends DurableObject<Env> {
           await this.flush();
           return { id: r.id };
         }
-        const avatar = await this.avatarRef(env, u.id, input.avatar);
+        const identity = this.joinIdentity(input.identity);
+        const avatar = await this.joinAvatar(env, u.id, input.avatar, identity);
         const created = this.ctx.storage.transactionSync(() => {
           this.open();
           // One active record per visitor: a new knock after a decision
@@ -723,6 +787,7 @@ export class Room extends DurableObject<Env> {
             id: previous?.id || crypto.randomUUID(),
             user_id: u.id,
             avatar,
+            identity,
             status: "PENDING",
             created_at: iso(),
           };
@@ -922,7 +987,7 @@ export class Room extends DurableObject<Env> {
             const id = crypto.randomUUID(),
               at = iso();
             this.ctx.storage.sql.exec(
-              "INSERT INTO charoo_messages(id,sender_id,client_message_id,ciphertext,reply_to,attachment_id,created_at) VALUES(?,?,?,?,?,?,?)",
+              "INSERT INTO charoo_messages(id,sender_id,client_message_id,ciphertext,reply_to,attachment_id,created_at,guest_name) VALUES(?,?,?,?,?,?,?,?)",
               id,
               u.id,
               b.clientMessageId,
@@ -930,6 +995,7 @@ export class Room extends DurableObject<Env> {
               b.replyTo || null,
               b.attachmentId || null,
               at,
+              guestName(p.identity) ?? null,
             );
             // One fingerprint namespace: a duplicate message counts for neither bar.
             if (
@@ -1151,8 +1217,9 @@ export class Room extends DurableObject<Env> {
             out.push({
               id: j.id,
               userId: j.user_id,
-              displayName: raw?.display_name || "Guest",
-              verified: !!raw?.verified,
+              displayName:
+                guestName(j.identity) || raw?.display_name || "Guest",
+              verified: j.identity?.mode === "guest" ? false : !!raw?.verified,
               status: j.status,
               reason: j.reason || null,
               createdAt: j.created_at,
@@ -1194,11 +1261,12 @@ export class Room extends DurableObject<Env> {
             this.saveJoinRequest(req);
             if (accept) {
               const p = this.participant(req.user_id);
-              if (!p) this.add(req.user_id, req.avatar);
+              if (!p) this.add(req.user_id, req.avatar, req.identity);
               else if (p.state !== "REMOVED") {
                 p.state = "JOINED";
                 p.presence_until = Date.now() + 90000;
                 p.avatar = req.avatar ?? p.avatar;
+                p.identity = req.identity ?? p.identity;
                 this.saveParticipant(p);
               } else
                 requireThat(false, 403, "That user was removed from this room");
@@ -1590,9 +1658,12 @@ export class Room extends DurableObject<Env> {
       }
       profiles.push({
         id: u.id,
-        name: r.type === "STRANGER" ? "Stranger" : u.display_name,
+        name:
+          r.type === "STRANGER"
+            ? "Stranger"
+            : guestName(p.identity) || u.display_name,
         ...(r.type === "STRANGER" ? {} : { avatar: await this.avatarView(p) }),
-        verified: !!u.verified,
+        verified: p.identity?.mode === "guest" ? false : !!u.verified,
         online: p.presence_until > Date.now(),
         mutedUntil:
           p.muted_until && Date.parse(p.muted_until) > Date.now()
@@ -1600,7 +1671,9 @@ export class Room extends DurableObject<Env> {
             : null,
         asl:
           (r.type !== "STRANGER" || aslRevealed || u.id === peekedSubject) &&
-          visible
+          visible &&
+          // A guest entry stays anonymous: no account age, gender or region.
+          p.identity?.mode !== "guest"
             ? {
                 age: u.profile.age,
                 gender: u.profile.gender,
@@ -1627,8 +1700,8 @@ export class Room extends DurableObject<Env> {
         joinRequests.push({
           id: j.id,
           userId: j.user_id,
-          displayName: raw?.display_name || "Guest",
-          verified: !!raw?.verified,
+          displayName: guestName(j.identity) || raw?.display_name || "Guest",
+          verified: j.identity?.mode === "guest" ? false : !!raw?.verified,
           status: j.status,
           reason: j.reason || null,
           createdAt: j.created_at,
@@ -1725,10 +1798,11 @@ export class Room extends DurableObject<Env> {
         id: m.id,
         roomId: r.id,
         senderId: m.sender_id,
+        // A guest message keeps the nickname it was written under, even after a profile rejoin.
         name:
           r.type === "STRANGER"
             ? "Stranger"
-            : sender?.display_name || "Former member",
+            : m.guest_name || sender?.display_name || "Former member",
         text: await decrypt(m.ciphertext, this.env.MESSAGE_KEY, r.id),
         createdAt: m.created_at,
         clientMessageId: m.client_message_id,
@@ -1758,7 +1832,7 @@ export class Room extends DurableObject<Env> {
   ) {
     if (!replyTo) return null;
     const target = this.rows(
-      "SELECT id,sender_id,ciphertext FROM charoo_messages WHERE id=?",
+      "SELECT id,sender_id,ciphertext,guest_name FROM charoo_messages WHERE id=?",
       replyTo,
     )[0];
     if (!target) return null;
@@ -1780,7 +1854,7 @@ export class Room extends DurableObject<Env> {
           ? target.sender_id === actor.userId
             ? "You"
             : "Stranger"
-          : sender?.display_name || "Former member",
+          : target.guest_name || sender?.display_name || "Former member",
       text: await decrypt(target.ciphertext, this.env.MESSAGE_KEY, room.id),
     };
   }

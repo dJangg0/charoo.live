@@ -489,7 +489,9 @@ export class AppCoordinator extends DurableObject<Env> {
             } else {
               requireThat(b.roomId, 400, "A shared conversation is required");
               unwrap(await roomStub(env, b.roomId).authorize(actor!, false));
-              unwrap(await roomStub(env, b.roomId).hasParticipant(target.id));
+              // Contacts and private chats carry account names, so a guest entry on either side cannot use them.
+              for (const id of [u.id, target.id])
+                unwrap(await roomStub(env, b.roomId).hasParticipant(id, true));
               if (b.kind === "CONTACT") {
                 // A quick chat can add a contact only after both profiles were shown.
                 const room = unwrap(

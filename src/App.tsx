@@ -2,6 +2,7 @@ import { Realtime } from "./realtime";
 import { RoomSidebar } from "./RoomSidebar";
 import { JoinRoomForm } from "./JoinRoomForm";
 import { AvatarChoicePicker } from "./AvatarChoice";
+import { JoinIdentityChoice } from "./JoinIdentity";
 import { ThemeSettings } from "./ThemeSettings";
 import { ProfilePicture } from "./ProfilePicture";
 import {
@@ -285,6 +286,8 @@ export function App() {
       kind: "avatar",
       id: "sky",
     }),
+    [joinAs, setJoinAs] = useState<"profile" | "guest">("profile"),
+    [guestNickname, setGuestNickname] = useState(""),
     [hasPicture, setHasPicture] = useState(false),
     [publicJoin, setPublicJoin] = useState<{
       roomId: string;
@@ -704,6 +707,11 @@ export function App() {
       setAdminLoading(false);
     }
   }
+  // The identity a join request carries: the profile, or a guest entry with an optional nickname.
+  const joinIdentityPayload = () =>
+    joinAs === "guest"
+      ? { mode: "guest" as const, nickname: guestNickname.trim() || undefined }
+      : { mode: "profile" as const };
   async function joinShared() {
     if (joinProfilePending) return;
     const t = new URLSearchParams(location.hash.slice(1)).get("room");
@@ -712,6 +720,7 @@ export function App() {
         const result = await api("/shared/join", "POST", {
           token: t,
           avatar: avatarChoice,
+          identity: joinIdentityPayload(),
         });
         if (result.pending) {
           setPendingJoin({
@@ -3935,6 +3944,7 @@ export function App() {
                 void act(async () => {
                   await api(`/rooms/${target.roomId}/join`, "POST", {
                     avatar: avatarChoice,
+                    identity: joinIdentityPayload(),
                   });
                   setModal(null);
                   setPublicJoin(null);
@@ -3947,10 +3957,22 @@ export function App() {
                 Choose how others see you in {publicJoin?.title || "this"}{" "}
                 conversation. You can still leave whenever you want.
               </p>
+              <JoinIdentityChoice
+                mode={joinAs}
+                onModeChange={(mode) => {
+                  setJoinAs(mode);
+                  if (mode === "guest" && avatarChoice.kind === "picture")
+                    setAvatarChoice({ kind: "avatar", id: "sky" });
+                }}
+                nickname={guestNickname}
+                onNicknameChange={setGuestNickname}
+                profileName={user?.displayName || "your profile"}
+              />
               <AvatarChoicePicker
                 value={avatarChoice}
                 onChange={setAvatarChoice}
                 hasPicture={hasPicture}
+                allowPicture={joinAs === "profile"}
               />
               <button className="button" disabled={busy}>
                 Join conversation <ArrowRight size={16} />
@@ -3963,10 +3985,22 @@ export function App() {
                 sex are optional and follow your profile visibility setting.
               </p>
               <JoinProfileFields profile={user?.profile} />
+              <JoinIdentityChoice
+                mode={joinAs}
+                onModeChange={(mode) => {
+                  setJoinAs(mode);
+                  if (mode === "guest" && avatarChoice.kind === "picture")
+                    setAvatarChoice({ kind: "avatar", id: "sky" });
+                }}
+                nickname={guestNickname}
+                onNicknameChange={setGuestNickname}
+                profileName={user?.displayName || "your profile"}
+              />
               <AvatarChoicePicker
                 value={avatarChoice}
                 onChange={setAvatarChoice}
                 hasPicture={hasPicture}
+                allowPicture={joinAs === "profile"}
               />
               <button className="button" disabled={busy}>
                 Join room <ArrowRight size={16} />

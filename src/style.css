@@ -5617,3 +5617,32 @@ canvas {
 .reconnect-cost-note {
   font-size: 0.9rem;
 }
+
+/* Join identity: enter with the profile, or as a guest with an optional nickname. */
+.join-identity {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+.join-identity legend {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.join-identity-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.join-identity-option small {
+  color: var(--muted);
+  margin-left: 6px;
+}
+.join-identity-nickname {
+  display: grid;
+  gap: 6px;
+}
+.join-identity-nickname small {
+  color: var(--muted);
+}

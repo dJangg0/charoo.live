@@ -4,6 +4,7 @@ import {
   roomSchema,
   messageSchema,
   avatarChoiceSchema,
+  joinIdentitySchema,
 } from "@charoo/contracts";
 import {
   all,
@@ -113,6 +114,7 @@ export function roomRoutes(app: Hono<HttpEnv>) {
       z.object({
         token: z.string().min(30).max(100),
         avatar: avatarChoiceSchema.optional(),
+        identity: joinIdentitySchema.optional(),
       }),
     ),
     async (c) => {
@@ -129,6 +131,7 @@ export function roomRoutes(app: Hono<HttpEnv>) {
           await roomStub(c.env, r.room_id).command(actor(c), "join", {
             tokenHash,
             avatar: input.avatar,
+            identity: input.identity,
           }),
         ),
       );
@@ -161,7 +164,12 @@ export function roomRoutes(app: Hono<HttpEnv>) {
   );
   app.post(
     "/api/rooms/:roomId/join",
-    body(z.object({ avatar: avatarChoiceSchema.optional() })),
+    body(
+      z.object({
+        avatar: avatarChoiceSchema.optional(),
+        identity: joinIdentitySchema.optional(),
+      }),
+    ),
     async (c) => {
       const result = await command(c, "join", c.get("input"));
       if (result && typeof result === "object" && "pending" in result)

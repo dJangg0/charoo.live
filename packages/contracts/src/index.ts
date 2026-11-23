@@ -263,6 +263,26 @@ export const AVATAR_IDS = [
   "moss",
 ] as const;
 export type AvatarId = (typeof AVATAR_IDS)[number];
+// Group and room joins: enter with the account profile, or as a guest. A guest
+// nickname is optional; without one the room shows a random guest name.
+export const GUEST_NICKNAME_MAX = 24;
+export const joinIdentitySchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("profile") }),
+  z.object({
+    mode: z.literal("guest"),
+    nickname: z
+      .string()
+      .trim()
+      .max(GUEST_NICKNAME_MAX)
+      .refine(
+        (value) => value === "" || value.length >= 2,
+        "Use at least 2 characters for a nickname",
+      )
+      .optional()
+      .transform((value) => value || undefined),
+  }),
+]);
+export type JoinIdentity = z.infer<typeof joinIdentitySchema>;
 export const avatarChoiceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("picture") }),
   z.object({ kind: z.literal("avatar"), id: z.enum(AVATAR_IDS) }),

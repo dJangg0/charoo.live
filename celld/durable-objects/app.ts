@@ -33,6 +33,9 @@ import {
   publicUser,
   audit,
   auditStatement,
+  OUTBOX_FRESH_MS,
+  OUTBOX_REDRIVE_MINUTES,
+  outboxRedrivePhase,
   type Actor,
   type RoomRecord,
 } from "../shared/data";
@@ -1457,7 +1460,12 @@ export class AppCoordinator extends DurableObject<Env> {
   async alarm() {
     for (const r of await all(
       this.env,
-      "SELECT id FROM app_outbox ORDER BY created_at LIMIT 50",
+      "SELECT id FROM app_outbox WHERE created_at>? OR rowid % ? = ? ORDER BY created_at LIMIT 50",
+      [
+        iso(Date.now() - OUTBOX_FRESH_MS),
+        OUTBOX_REDRIVE_MINUTES,
+        outboxRedrivePhase(),
+      ],
     ))
       try {
         await this.env.JOBS.send({

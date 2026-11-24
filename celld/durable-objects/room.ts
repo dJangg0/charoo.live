@@ -28,6 +28,9 @@ import {
   coordinator,
   cursor,
   parseCursor,
+  OUTBOX_FRESH_MS,
+  OUTBOX_REDRIVE_MINUTES,
+  outboxRedrivePhase,
   type Actor,
   type RoomRecord,
 } from "../shared/data";
@@ -138,6 +141,15 @@ export class Room extends DurableObject<Env> {
    CREATE TABLE IF NOT EXISTS charoo_calls(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS charoo_join_requests(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS charoo_outbox(id TEXT PRIMARY KEY,kind TEXT NOT NULL,payload TEXT NOT NULL);`);
+    // Additive: when an outbox row was queued; rows from before this column stay NULL and are redriven by phase only.
+    if (
+      !this.rows("PRAGMA table_info(charoo_outbox)").some(
+        (c) => c.name === "queued_at",
+      )
+    )
+      ctx.storage.sql.exec(
+        "ALTER TABLE charoo_outbox ADD COLUMN queued_at INTEGER",
+      );
     // Additive: the guest nickname a message was sent under, kept with the message.
     if (
       !this.rows("PRAGMA table_info(charoo_messages)").some(
@@ -314,10 +326,11 @@ export class Room extends DurableObject<Env> {
   }
   private outbox(kind: string, payload: any) {
     this.ctx.storage.sql.exec(
-      "INSERT INTO charoo_outbox(id,kind,payload) VALUES(?,?,?)",
+      "INSERT INTO charoo_outbox(id,kind,payload,queued_at) VALUES(?,?,?,?)",
       crypto.randomUUID(),
       kind,
       JSON.stringify(payload),
+      Date.now(),
     );
   }
   private changed() {
@@ -2349,7 +2362,12 @@ export class Room extends DurableObject<Env> {
       } catch {
         ws.close(4001, "Session unavailable");
       }
-    for (const item of this.rows("SELECT id FROM charoo_outbox LIMIT 50"))
+    for (const item of this.rows(
+      "SELECT id FROM charoo_outbox WHERE queued_at>? OR rowid % ? = ? LIMIT 50",
+      Date.now() - OUTBOX_FRESH_MS,
+      OUTBOX_REDRIVE_MINUTES,
+      outboxRedrivePhase(),
+    ))
       try {
         await this.env.JOBS.send({
           source: "room",

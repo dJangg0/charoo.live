@@ -39,6 +39,14 @@ export interface RoomRecord {
   version: number;
 }
 export const iso = (at = Date.now()) => new Date(at).toISOString();
+// Outbox redrive. A row that did not deliver inline is re-sent to the queue on
+// the short retry alarm while it is fresh (OUTBOX_FRESH_MS), then only in its
+// rowid phase, once every OUTBOX_REDRIVE_MINUTES. Re-sending every row on every
+// alarm let one stuck row exhaust the account's daily Queues allowance.
+export const OUTBOX_REDRIVE_MINUTES = 10;
+export const OUTBOX_FRESH_MS = 30000;
+export const outboxRedrivePhase = (at = Date.now()) =>
+  Math.floor(at / 60000) % OUTBOX_REDRIVE_MINUTES;
 // Local no-auth mode (ADMIN_NO_AUTH=true): requests to /api/admin/* run as
 // this synthetic admin. For trusted networks / Zero Trust only — never enable
 // in production.

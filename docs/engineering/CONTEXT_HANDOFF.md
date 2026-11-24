@@ -1,5 +1,15 @@
 # Charoo shared engineering handoff
 
+## Queue quota and staging outage, 2026-11-24
+
+- Cloudflare's Queues free allowance (10,000 operations/day, shared by the `project` account) was exhausted on 2026-11-24; sends fail until 2026-11-25 00:00 UTC. Public `chat.charoo.live` still served the app shell and API responses. Discovery was empty because production had no open rooms.
+- Staging `/api/*` returned 503 because staging D1 had five of six migrations recorded. `ensureSchema` in production mode throws `DATABASE_NOT_MIGRATED`, so the AppCoordinator refused to start. Applied `0006_credits.sql` to `charoo-d1-staging` (remote). Staging `/api/health` now returns 200 and `/api/settings` returns 401.
+- Both alarms (`AppCoordinator.alarm`, `Room.alarm`) re-sent every outbox row to the queue on every run. A row that cannot deliver inline therefore cost a queue send each minute. Fixed in source: each row is redriven once per 10-minute rowid phase, plus on the short retry alarm while it is under 30 s old, so a transient inline failure still retries in about a second (`celld/shared/data.ts`, `app.ts`, `room.ts`; Room outbox gained an additive `queued_at` column, NULL for older rows). `tests/outbox-redrive.test.ts` covers both the capped redrive of an old row and the fresh-row retry for every phase; the Room alarm path has no automated test.
+- Verified locally: `pnpm check` exit 0 (18 files, 162 tests).
+- Not deployed: the code fix needs a deploy from `staging` (guarded script) and `main` (production). The guard blocks this branch, so I did not bypass it. Production still runs the 2026-11-17 build without this fix.
+- Not verified: which outbox kind is stuck; the room-level Durable Object outboxes are not visible from D1; `wrangler queues` shows no operation counts.
+- Uncommitted: `celld/shared/data.ts`, `celld/durable-objects/app.ts`, `celld/durable-objects/room.ts`, `tests/outbox-redrive.test.ts`, `docs/engineering/IMPLEMENTATION_MATRIX.md`, `docs/engineering/CONTEXT_HANDOFF.md`.
+
 ## Join identity and reconnect native verification, 2026-11-24
 
 - FR-04 now lets each group join enter with the profile or as a guest with an optional nickname (2 to 24 characters). Members and the host see the nickname; guest entries get no profile picture; earlier guest messages keep their nickname after a profile rejoin. The SRS FR-04 sentence is now [CURRENT]. Evidence is in the [matrix](IMPLEMENTATION_MATRIX.md) FR-04 section and the 2026-11-24 log row.

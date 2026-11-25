@@ -76,7 +76,7 @@ const server = createServer(async (request, response) => {
           new TextEncoder().encode("fixture-livekit-secret"),
           { issuer: "fixture-livekit-key" },
         );
-      if (!(claims.payload.video as any)?.roomAdmin)
+      if (!(claims.payload.video as any)?.roomCreate)
         throw new Error("Invalid LiveKit grant");
       state.terminations.push(body);
       response.statusCode = state.livekitFail ? 503 : 200;

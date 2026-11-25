@@ -2,7 +2,9 @@
 
 Review date: **2026-11-12 (Asia/Manila)**. Scope: the current working tree, including the existing uncommitted implementation. This is a focused source review with isolated local reproductions, not a comprehensive security certification or a production penetration test.
 
-**All findings below remain open. No application code, configuration, or tracked tests were changed to fix them.** No production requests, deployments, migrations, or real provider accounts were used during this review. Suggested directions are for later review, not instructions to implement fixes during unrelated tasks.
+The original 2026-11-12 review recorded findings through source inspection and isolated local tests. Subsequent fixes and their verification are recorded under the relevant findings.
+
+**Subsequent authorized change, 2026-11-17:** GAP-01 below was implemented as a free, consent-based reconnect request flow. This did not change the historical 2026-11-12 review evidence. Four focused local Durable Object tests now cover archive ownership, duplicate requests, acceptance, expiry, rejection, archive removal and current blocks; browser/native Cloudflare runtime behavior is not verified.
 
 Priority: **P1** needs prompt attention, or resolution before enabling the affected integration. **P2** is a confirmed functional, privacy, or development-workflow defect to schedule. Conditional impact and verification limits are stated per finding. An implemented feature can still be incorrect in the cases below.
 
@@ -16,6 +18,8 @@ Cause: [join approval](../celld/durable-objects/room.ts#L790) promotes the reque
 
 **Evidence:** isolated HTTP/SQLite tests covered both block directions: fresh join 403, old-request approval 200, history 200, send 201. Direction to review: revalidate current requester eligibility at approval and define consistent ongoing access rules. Do not remove protection for legitimate pending applicants.
 
+**Fix (2026-11-22, source):** `join_respond` refuses approval while a block exists between the host and the requester, in either direction (403). `authorize()` now denies a non-host member of a shared room when a block exists between them and the host, in either direction. That also covers live delivery and socket upgrades. Regression tests in `tests/domain.test.ts` (approval after a block; a block after approval) fail on the original code. Blocks between two ordinary members are unchanged. Native, browser and deployed checks not run.
+
 ## IMP-02
 
 **P1, conditional on video — Provider call termination has the wrong grant.** Requirements: FR-09, BE-03, BE-06.
@@ -26,6 +30,8 @@ Cause: [join approval](../celld/durable-objects/room.ts#L790) promotes the reque
 
 Direction to review: use the documented management permission and test actual management-token grants, not only mocked HTTP statuses.
 
+**Fix (2026-11-22, source):** `endCall` signs `DeleteRoom` with `roomCreate`, which LiveKit documents as the permission to create or delete rooms, and drops `roomAdmin`. The native LiveKit fixture now requires `roomCreate`, and `tests/cloudflare-fetch.test.ts` decodes the signed token to assert the grant. Not run against a live LiveKit server.
+
 ## IMP-03
 
 **P2 — Join-status discloses a private room title to an unrelated user.** Requirements: FR-04, FR-07, BE-01.
@@ -33,6 +39,8 @@ Direction to review: use the documented management permission and test actual ma
 An authenticated outsider who knows a shared room's UUID can call [the join-status route](../celld/features/rooms/routes.ts#L156) without membership, an invitation, or a prior request. [The NONE branch](../celld/durable-objects/room.ts#L463) returns its private title.
 
 **Evidence:** isolated HTTP requests returned 404 for the ordinary room snapshot but 200, `NONE`, and the title for join-status. Knowledge of the UUID is a prerequisite; this does not establish enumerable IDs or message access. Direction to review: return only justified status information to authorized members or actual applicants, with a minimal response for unrelated callers.
+
+**Fix (2026-11-22, source):** `join_status` returns `{ status: "NONE", roomId }` with no title for callers without a request. Applicants keep the title they receive with their pending status, and the frontend falls back to the title stored when the request was created. Regression test: `tests/domain.test.ts` (a stranger gets no title; the applicant still does).
 
 ## IMP-04
 
@@ -68,11 +76,11 @@ An authenticated outsider who knows a shared room's UUID can call [the join-stat
 
 ## IMP-08
 
-**P2 — One failed presence heartbeat pins a healthy connection offline.** Requirements: AD-02, AD-03, FR-11.
+**P2, fixed in the browser client — One failed presence heartbeat pinned a healthy connection offline.** Affects AD-02, AD-03, FR-11.
 
-[The interval's error handler](../src/App.tsx#L617) sets `connected=false`. [Later heartbeat success](../src/App.tsx#L413) updates presence but does not restore the flag; restoration depends on a new socket-open event. Meanwhile [fallback polling](../src/App.tsx#L640) remains enabled.
+The heartbeat error handler set `connected=false`. A later successful heartbeat only updated presence, so the reconnect indicator and five-second fallback polls persisted until the next socket open. In the original browser reproduction, a single HTTP 503 followed by success increased history reads from one to six while the socket stayed open.
 
-**Evidence:** a browser fixture with an open socket and virtual clock returned 503 once, then 200 for presence. No socket closed; the UI stayed Reconnecting and message reads grew from 1 to 6. Direction to review: separate presence-request health from transport health and define how the fallback exits after recovery.
+The room socket now determines chat connectivity. The active view coalesces refreshes, skips polling while a request is pending, and delays retries after transient errors. Browser regressions cover presence 429 and 503 responses, duplicate and newer message events, peer read receipts, and a slow fallback refresh through a rate-limit cooldown and reconnect. [Browser coverage](../tests/browser/chat-refresh.spec.ts)
 
 ## IMP-09
 
@@ -98,13 +106,13 @@ An authenticated outsider who knows a shared room's UUID can call [the join-stat
 
 This finding predates the present audit and was **not rerun here**. It does not establish a failure in the deployed, already-migrated production database. Direction to review: use a migration execution path compatible with real D1/workerd and test a clean development start.
 
-## GAP-01
+## GAP-01 — Resolved in source; verification pending
 
-**Deferred feature, not a runtime defect — Reconnect is not implemented.** Requirement: FR-06.
+**Reconnect request/acceptance was deferred and is now implemented under user authorization.** Requirement: FR-06.
 
-The [creation](../celld/durable-objects/app.ts#L435) and [acceptance](../celld/durable-objects/app.ts#L505) branches deliberately return 402 because checkout is unavailable. The [browser button](../src/App.tsx#L2023) is deliberately disabled. A valid archive and the current zero price do not enable a free path.
+The historical [creation](../celld/durable-objects/app.ts#L435) and acceptance branches returned 402, and the archive button was disabled. The updated flow lets a verified user request reconnection from their exact unexpired archive. The recipient can accept to open a private room or reject; rejection marks the request and deletes the matching archive row owned by the requester in one D1 batch. Requests remain subject to expiry, verification and current block checks. The current `reconnect_price` contract is fixed at zero, so the flow is free.
 
-**Evidence:** an isolated fixture with a valid archive and verified accounts received the expected hard-coded 402. The SRS previously overstated this as working relationship functionality. Mark it NOT IMPLEMENTED; paid/free checkout rules need an explicit product decision before implementation. Do not treat the intentional disabled button as an accidental regression.
+**Evidence and limits:** four focused tests in [`tests/domain.test.ts`](../tests/domain.test.ts#L636) passed in the SQLite-backed Durable Object harness. They cover an exact eligible archive, duplicate request reuse, private-room acceptance, rejection after archive expiry, requester-owned archive removal on rejection, and denial after a current block. The earlier isolated fixture result documents behavior before this implementation. No browser flow, native runtime, Cloudflare deployment or migration was verified.
 
 ## Verification and review limits
 

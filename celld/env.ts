@@ -23,6 +23,8 @@ export const workerEnvironment = {
     "TRUSTED_CLIENT_IP_HEADER",
     "ADMIN_NO_AUTH",
     "PREVIEW_MODE",
+    "CREDITS_SANDBOX",
+    "CREDITS_WEBHOOK_SECRET",
   ] as const,
 };
 // Celld RPC returns plain values. Keep its structural client surface explicit;
@@ -46,6 +48,8 @@ type RoomClient = Pick<
   | "deliver"
   | "sweep"
   | "flush"
+  | "peekTarget"
+  | "disclosureState"
 >;
 type AppClient = Pick<
   AppCoordinator,
@@ -88,6 +92,8 @@ export interface Env {
   TRUSTED_CLIENT_IP_HEADER?: string;
   ADMIN_NO_AUTH?: string;
   PREVIEW_MODE?: string;
+  CREDITS_SANDBOX?: string;
+  CREDITS_WEBHOOK_SECRET?: string;
   DB: D1Database;
   MEDIA: R2Bucket;
   JOBS: Queue<Job>;

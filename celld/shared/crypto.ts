@@ -89,18 +89,6 @@ export async function fingerprint(text: string, key: string, roomId: string) {
     (n) => n.toString(16).padStart(2, "0"),
   ).join("");
 }
-export function meaningful(
-  text: string,
-  lastAt: string | null,
-  now = Date.now(),
-) {
-  const n = normalized(text);
-  return (
-    n.length >= 8 &&
-    new Set(n).size >= 4 &&
-    (!lastAt || now - Date.parse(lastAt) >= 3000)
-  );
-}
 export async function capabilityKey(key: string) {
   const k = await crypto.subtle.importKey(
     "raw",

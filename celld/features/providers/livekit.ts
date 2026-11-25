@@ -33,8 +33,9 @@ export async function endCall(env: Env, id: string) {
     503,
     "LiveKit configuration required",
   );
+  // DeleteRoom is authorized by the roomCreate grant ("create or delete rooms").
   const jwt = await new SignJWT({
-    video: { roomAdmin: true, room: `call-${id}` },
+    video: { roomCreate: true, room: `call-${id}` },
   })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuer(env.LIVEKIT_API_KEY)

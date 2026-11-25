@@ -3,7 +3,8 @@ import {
   z,
   roomSchema,
   messageSchema,
-  pictureSharingDecisionSchema,
+  avatarChoiceSchema,
+  joinIdentitySchema,
 } from "@charoo/contracts";
 import {
   all,
@@ -109,9 +110,16 @@ export function roomRoutes(app: Hono<HttpEnv>) {
   });
   app.post(
     "/api/shared/join",
-    body(z.object({ token: z.string().min(30).max(100) })),
+    body(
+      z.object({
+        token: z.string().min(30).max(100),
+        avatar: avatarChoiceSchema.optional(),
+        identity: joinIdentitySchema.optional(),
+      }),
+    ),
     async (c) => {
-      const tokenHash = await hash(c.get("input").token),
+      const input = c.get("input");
+      const tokenHash = await hash(input.token),
         r = await first(
           c.env,
           "SELECT room_id FROM invite_index WHERE token_hash=?",
@@ -122,6 +130,8 @@ export function roomRoutes(app: Hono<HttpEnv>) {
         unwrap(
           await roomStub(c.env, r.room_id).command(actor(c), "join", {
             tokenHash,
+            avatar: input.avatar,
+            identity: input.identity,
           }),
         ),
       );
@@ -138,11 +148,6 @@ export function roomRoutes(app: Hono<HttpEnv>) {
   app.get("/api/rooms/:roomId", async (c) =>
     c.json(await command(c, "snapshot")),
   );
-  app.post(
-    "/api/rooms/:roomId/picture-sharing",
-    body(pictureSharingDecisionSchema),
-    async (c) => c.json(await command(c, "picture.share")),
-  );
   app.get("/api/rooms/:roomId/messages", async (c) =>
     c.json(
       await command(
@@ -157,12 +162,21 @@ export function roomRoutes(app: Hono<HttpEnv>) {
   app.get("/api/rooms/:roomId/socket", (c) =>
     roomStub(c.env, uuid(c.req.param("roomId"))).fetch(socketRequest(c)),
   );
-  app.post("/api/rooms/:roomId/join", async (c) => {
-    const result = await command(c, "join");
-    if (result && typeof result === "object" && "pending" in result)
-      return c.json(result, 202);
-    return c.json(result ?? {});
-  });
+  app.post(
+    "/api/rooms/:roomId/join",
+    body(
+      z.object({
+        avatar: avatarChoiceSchema.optional(),
+        identity: joinIdentitySchema.optional(),
+      }),
+    ),
+    async (c) => {
+      const result = await command(c, "join", c.get("input"));
+      if (result && typeof result === "object" && "pending" in result)
+        return c.json(result, 202);
+      return c.json(result ?? {});
+    },
+  );
   app.get("/api/rooms/:roomId/join-status", async (c) =>
     c.json(await command(c, "join_status")),
   );

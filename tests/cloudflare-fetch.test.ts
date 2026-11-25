@@ -1,3 +1,4 @@
+import { decodeJwt } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exchange } from "../celld/features/auth/google";
 import { mail } from "../celld/features/providers/email";
@@ -174,5 +175,22 @@ describe("Cloudflare-compatible provider dispatch", () => {
     expect(
       request.mock.calls.every(([, input]) => input?.redirect === "manual"),
     ).toBe(true);
+  });
+
+  it("ends LiveKit calls with the roomCreate grant that DeleteRoom requires", async () => {
+    const f = await fixture();
+    Object.assign(f.env, {
+      LIVEKIT_URL: "https://livekit.fixture.example",
+      LIVEKIT_API_KEY: "fixture-key",
+      LIVEKIT_API_SECRET: "fixture-secret",
+    });
+    const request = workerFetch(() => new Response("{}"));
+    await endCall(f.env, crypto.randomUUID());
+    const init = request.mock.calls[0][1] as RequestInit;
+    const authorization = (init.headers as Record<string, string>)
+      .Authorization;
+    const claims = decodeJwt(authorization.slice("Bearer ".length));
+    expect(claims.video).toMatchObject({ roomCreate: true });
+    expect(claims.video).not.toHaveProperty("roomAdmin");
   });
 });

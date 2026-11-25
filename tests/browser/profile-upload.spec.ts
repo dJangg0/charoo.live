@@ -98,7 +98,7 @@ test("profile photo saves in order and waits for the backend before showing succ
     .click();
   await (await chooser).setFiles(file);
   await expect(
-    page.getByText("Uploading your picture…", { exact: true }),
+    page.getByText("Confirming your picture…", { exact: true }),
   ).toBeVisible();
   await expect(picker).toBeDisabled();
   await expect(page.getByText(savedNotice, { exact: true })).toHaveCount(0);

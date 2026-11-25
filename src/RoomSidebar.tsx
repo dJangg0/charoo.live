@@ -1,3 +1,4 @@
+import { Avatar, type MemberAvatar } from "./Avatar";
 import { useRef } from "react";
 import {
   Check,
@@ -24,6 +25,7 @@ interface Member {
   online?: boolean;
   mutedUntil?: string | null;
   asl: { age: number | null; gender: string; region: string } | null;
+  avatar?: MemberAvatar;
 }
 export interface JoinRequestItem {
   id: string;
@@ -256,7 +258,11 @@ export function RoomSidebar({
               aria-label={`Member ${member.name}`}
             >
               <div>
-                <span className="avatar">{member.name[0]}</span>
+                {room.type === "STRANGER" ? (
+                  <span className="avatar">{member.name[0]}</span>
+                ) : (
+                  <Avatar avatar={member.avatar} name={member.name} />
+                )}
                 <div className="member-identity">
                   <strong>
                     {member.name}
@@ -282,17 +288,29 @@ export function RoomSidebar({
                   <span className="blocked-badge">Blocked by you</span>
                 )}
               </div>
-              {member.asl && (
-                <p className="member-profile">
-                  {[
-                    member.asl.age ? `Age ${member.asl.age}` : "",
-                    member.asl.gender,
-                    member.asl.region,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              )}
+              {member.asl &&
+                (room.type !== "STRANGER" ||
+                  (user && member.id !== user.id)) && (
+                  <p className="member-profile">
+                    {room.type === "STRANGER"
+                      ? [
+                          member.asl.age ? `Age ${member.asl.age}` : "",
+                          member.asl.gender ? `Sex ${member.asl.gender}` : "",
+                          member.asl.region
+                            ? `Location ${member.asl.region}`
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : [
+                          member.asl.age ? `Age ${member.asl.age}` : "",
+                          member.asl.gender,
+                          member.asl.region,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                  </p>
+                )}
               {member.id !== user?.id && (
                 <>
                   {(isOwner || room.type !== "STRANGER") && (
@@ -308,7 +326,11 @@ export function RoomSidebar({
                             onModerate(muted ? "UNMUTE" : "MUTE", member.id)
                           }
                         >
-                          {muted ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                          {muted ? (
+                            <Volume2 size={16} />
+                          ) : (
+                            <VolumeX size={16} />
+                          )}
                           {muted ? "Unmute" : "Mute for 30 min"}
                         </button>
                       )}

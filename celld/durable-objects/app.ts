@@ -12,6 +12,10 @@ import {
   roomSchema,
   requestSchema,
   settingsSchema,
+  creditOrderSchema,
+  peekSchema,
+  slotPurchaseSchema,
+  CREDIT_PACKS,
 } from "@charoo/contracts";
 import {
   all,
@@ -29,6 +33,9 @@ import {
   publicUser,
   audit,
   auditStatement,
+  OUTBOX_FRESH_MS,
+  OUTBOX_REDRIVE_MINUTES,
+  outboxRedrivePhase,
   type Actor,
   type RoomRecord,
 } from "../shared/data";
@@ -36,6 +43,21 @@ import { token, hash, encrypt, decrypt } from "../shared/crypto";
 import { requireThat, result, unwrap, type Result } from "../shared/errors";
 import { ensureSchema } from "../shared/migrations";
 import type { GoogleIdentity } from "../features/auth/google";
+import {
+  walletOf,
+  entryExists,
+  grantStatements,
+  spendStatements,
+  slotIncrementStatement,
+  contactUsage,
+  contactLimit,
+  dailyClaim,
+  reconnectPrice,
+  requireCredits,
+  utcDay,
+  activityGrantsToday,
+  ACTIVITY_REWARDS_PER_DAY,
+} from "../features/credits/wallet";
 
 export class AppCoordinator extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -171,6 +193,7 @@ export class AppCoordinator extends DurableObject<Env> {
                   [v.email, id],
                 ),
                 stmt(env, "DELETE FROM sessions WHERE user_id=?", [id]),
+                ...(await this.verifyBonus(id)),
               );
             if (actor)
               writes.push(
@@ -284,6 +307,7 @@ export class AppCoordinator extends DurableObject<Env> {
                     [identity.email, id],
                   ),
                   stmt(env, "DELETE FROM sessions WHERE user_id=?", [id]),
+                  ...(await this.verifyBonus(id)),
                 );
               else if (!existing)
                 writes.push(
@@ -298,6 +322,7 @@ export class AppCoordinator extends DurableObject<Env> {
                       iso(),
                     ],
                   ),
+                  ...(await this.verifyBonus(id)),
                 );
               writes.push(
                 stmt(
@@ -435,7 +460,9 @@ export class AppCoordinator extends DurableObject<Env> {
           case "social.create": {
             requireThat(u?.verified, 403, "Verify your email first");
             const b = requestSchema.parse(input);
+            const cfg = await settings(env);
             const target = await user(env, b.targetId);
+            let requestExpiresAt = iso(Date.now() + 86400000);
             requireThat(
               target.verified && target.id !== u.id,
               400,
@@ -447,24 +474,45 @@ export class AppCoordinator extends DurableObject<Env> {
               "Request unavailable",
             );
             if (b.kind === "RECONNECT") {
-              requireThat(
-                await first(
-                  env,
-                  "SELECT 1 FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND expires_at>?",
-                  [u.id, target.id, iso()],
-                ),
-                404,
-                "Reconnect window expired",
+              requireThat(b.roomId, 400, "A past quick chat is required");
+              const archive = await first(
+                env,
+                "SELECT expires_at FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=? AND expires_at>?",
+                [u.id, target.id, b.roomId, iso()],
               );
-              requireThat(
-                false,
-                402,
-                "Paid reconnect checkout is not available yet",
-              );
+              requireThat(archive, 404, "Reconnect window expired");
+              requestExpiresAt = archive.expires_at;
+              const price = reconnectPrice(cfg);
+              if (price > 0)
+                requireThat(
+                  (await walletOf(env, u.id)).balance >= price,
+                  403,
+                  "Not enough credits to reconnect",
+                );
             } else {
               requireThat(b.roomId, 400, "A shared conversation is required");
               unwrap(await roomStub(env, b.roomId).authorize(actor!, false));
-              unwrap(await roomStub(env, b.roomId).hasParticipant(target.id));
+              // Contacts and private chats carry account names, so a guest entry on either side cannot use them.
+              for (const id of [u.id, target.id])
+                unwrap(await roomStub(env, b.roomId).hasParticipant(id, true));
+              if (b.kind === "CONTACT") {
+                // A quick chat can add a contact only after both profiles were shown.
+                const room = unwrap(
+                  await roomStub(env, b.roomId).disclosureState(actor!),
+                );
+                requireThat(
+                  room.type !== "STRANGER" || room.profileEligible,
+                  409,
+                  "You can add this contact once you both reach the profile milestone",
+                );
+                if (cfg.credits_enabled)
+                  requireThat(
+                    (await contactUsage(env, u.id)) <
+                      contactLimit(cfg, await walletOf(env, u.id)),
+                    409,
+                    "Contact storage full. Free a slot or buy more.",
+                  );
+              }
             }
             await run(
               env,
@@ -473,9 +521,16 @@ export class AppCoordinator extends DurableObject<Env> {
             );
             const previous = await first(
               env,
-              "SELECT id FROM social_requests WHERE requester_id=? AND target_id=? AND kind=? AND state='PENDING'",
+              "SELECT id,source_room_id FROM social_requests WHERE requester_id=? AND target_id=? AND kind=? AND state='PENDING'",
               [u.id, target.id, b.kind],
             );
+            if (b.kind === "RECONNECT")
+              requireThat(
+                !previous || previous.source_room_id === b.roomId,
+                409,
+                "A reconnect request is already pending for this user",
+              );
+            if (b.kind === "RECONNECT" && previous) return { id: previous.id };
             const id = previous?.id || crypto.randomUUID();
             await this.effect(
               "event",
@@ -501,7 +556,7 @@ export class AppCoordinator extends DurableObject<Env> {
                         b.kind,
                         b.roomId || null,
                         iso(),
-                        iso(Date.now() + 86400000),
+                        requestExpiresAt,
                       ],
                     ),
                   ],
@@ -516,23 +571,32 @@ export class AppCoordinator extends DurableObject<Env> {
               [input.id, u.id],
             );
             requireThat(r && r.expires_at > iso(), 404, "Request unavailable");
-            if (input.accept && r.kind === "RECONNECT")
-              requireThat(
-                false,
-                402,
-                "Paid reconnect checkout is not available yet",
-              );
-            if (r.state === "ACCEPTED")
-              return { roomId: r.result_room_id, requesterId: r.requester_id };
-            requireThat(r.state === "PENDING", 404, "Request unavailable");
-            await user(env, r.requester_id);
+            requireThat(
+              r.state === "PENDING" || r.state === "ACCEPTED",
+              404,
+              "Request unavailable",
+            );
+            const requester = await user(env, r.requester_id);
             requireThat(
               !(await blocked(env, u.id, r.requester_id)),
               403,
               "Request unavailable",
             );
+            if (r.state === "ACCEPTED")
+              return { roomId: r.result_room_id, requesterId: r.requester_id };
+            if (
+              input.accept &&
+              r.kind === "RECONNECT" &&
+              !(await first(
+                env,
+                "SELECT 1 FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=? AND expires_at>?",
+                [r.requester_id, u.id, r.source_room_id, iso()],
+              ))
+            )
+              requireThat(false, 404, "Reconnect window expired");
             let roomId: string | null = null;
             if (input.accept) {
+              const cfg = await settings(env);
               const [a, b] = [u.id, r.requester_id].sort();
               const contact =
                 r.kind === "CONTACT"
@@ -550,6 +614,70 @@ export class AppCoordinator extends DurableObject<Env> {
               roomId =
                 contact?.room_id ||
                 (op ? JSON.parse(op.payload).record.id : crypto.randomUUID());
+              // A new contact needs a free slot on both sides while credits are enabled.
+              if (r.kind === "CONTACT" && !contact && cfg.credits_enabled) {
+                requireThat(
+                  (await contactUsage(env, u.id)) <
+                    contactLimit(cfg, await walletOf(env, u.id)),
+                  409,
+                  "Your contact storage is full. Free a slot or buy more to accept.",
+                );
+                requireThat(
+                  (await contactUsage(env, r.requester_id)) <
+                    contactLimit(cfg, await walletOf(env, r.requester_id)),
+                  409,
+                  `${requester.display_name}’s contact storage is full.`,
+                );
+              }
+              // The reconnect charge lands on acceptance. It is written in the same
+              // atomic batch that creates the room, so failure leaves no partial state.
+              const price =
+                r.kind === "RECONNECT" && !op ? reconnectPrice(cfg) : 0;
+              let charge: D1PreparedStatement[] = [];
+              if (price > 0) {
+                if ((await walletOf(env, r.requester_id)).balance < price) {
+                  await this.effect(
+                    "event",
+                    {
+                      type: "request.responded",
+                      userIds: [u.id, r.requester_id],
+                      payload: {
+                        roomId: null,
+                        requesterId: r.requester_id,
+                        accepted: false,
+                        expired: true,
+                      },
+                    },
+                    [
+                      stmt(
+                        env,
+                        "UPDATE social_requests SET state='EXPIRED' WHERE id=? AND state='PENDING'",
+                        [r.id],
+                      ),
+                    ],
+                  );
+                  requireThat(
+                    false,
+                    409,
+                    `${requester.display_name} no longer has enough credits to reconnect`,
+                  );
+                }
+                charge = [
+                  stmt(
+                    env,
+                    "UPDATE social_requests SET state='ACCEPTED',result_room_id=? WHERE id=? AND state='PENDING'",
+                    [roomId, r.id],
+                  ),
+                  ...spendStatements(
+                    env,
+                    r.requester_id,
+                    "SPEND_RECONNECT",
+                    price,
+                    `reconnect:${r.id}`,
+                    r.id,
+                  ),
+                ];
+              }
               if (!contact)
                 await this.create(
                   this.roomRecord(
@@ -568,6 +696,7 @@ export class AppCoordinator extends DurableObject<Env> {
                     contact: r.kind === "CONTACT",
                     requesterId: r.requester_id,
                   },
+                  charge,
                 );
               const writes = [
                 stmt(
@@ -585,13 +714,30 @@ export class AppCoordinator extends DurableObject<Env> {
                   ),
                 );
               await env.DB.batch(writes);
+            } else if (r.kind === "RECONNECT") {
+              await env.DB.batch([
+                stmt(
+                  env,
+                  "UPDATE social_requests SET state='REJECTED' WHERE id=? AND state='PENDING'",
+                  [r.id],
+                ),
+                stmt(
+                  env,
+                  "DELETE FROM quick_chat_archives WHERE user_id=? AND peer_id=? AND room_id=?",
+                  [r.requester_id, u.id, r.source_room_id],
+                ),
+              ]);
             } else
               await run(
                 env,
                 "UPDATE social_requests SET state='REJECTED' WHERE id=?",
                 [r.id],
               );
-            const outcome = { roomId, requesterId: r.requester_id };
+            const outcome = {
+              roomId,
+              requesterId: r.requester_id,
+              accepted: !!input.accept,
+            };
             await this.enqueue("event", {
               type: "request.responded",
               userIds: [u.id, r.requester_id],
@@ -762,6 +908,246 @@ export class AppCoordinator extends DurableObject<Env> {
               );
             return null;
           }
+          case "credits.claim_daily": {
+            requireThat(u?.verified, 403, "Verify your email to earn credits");
+            const cfg = await settings(env);
+            requireCredits(cfg);
+            const today = utcDay(),
+              key = `daily:${u.id}:${today}`,
+              wallet = await walletOf(env, u.id),
+              claim = dailyClaim(wallet, cfg, today);
+            if (!claim.claimable || (await entryExists(env, key)))
+              return {
+                claimed: false,
+                amount: 0,
+                streak: wallet.dailyStreak,
+                balance: wallet.balance,
+              };
+            await env.DB.batch(
+              grantStatements(
+                env,
+                u.id,
+                "GRANT_DAILY",
+                claim.amount,
+                key,
+                today,
+                [
+                  stmt(
+                    env,
+                    "UPDATE credit_wallets SET last_daily_grant_on=?,daily_streak=?,updated_at=? WHERE user_id=? AND NOT EXISTS(SELECT 1 FROM credit_entries WHERE entry_key=?)",
+                    [today, claim.streak, iso(), u.id, key],
+                  ),
+                ],
+              ),
+            );
+            return {
+              claimed: true,
+              amount: claim.amount,
+              streak: claim.streak,
+              balance: (await walletOf(env, u.id)).balance,
+            };
+          }
+          case "credits.peek": {
+            requireThat(u?.verified, 403, "Verify your email to use credits");
+            const cfg = await settings(env);
+            requireCredits(cfg);
+            const b = peekSchema.parse(input),
+              roomId = String(input.roomId),
+              key = `peek:${roomId}:${u.id}`;
+            if (await entryExists(env, key))
+              return { purchased: true, charged: 0 };
+            const view = unwrap(await roomStub(env, roomId).peekTarget(actor!));
+            if (view.purchased) return { purchased: true, charged: 0 };
+            requireThat(
+              view.revealsAsl || view.revealsPicture,
+              409,
+              "There is nothing new to reveal",
+            );
+            requireThat(
+              view.revealsAsl === b.revealsAsl &&
+                view.revealsPicture === b.revealsPicture,
+              409,
+              "The reveal changed. Review it again before buying.",
+            );
+            const price = cfg.credits_peek_price,
+              wallet = await walletOf(env, u.id);
+            requireThat(wallet.balance >= price, 402, "Not enough credits");
+            await env.DB.batch([
+              ...spendStatements(env, u.id, "SPEND_PEEK", price, key, roomId),
+              stmt(
+                env,
+                "INSERT INTO profile_peeks(room_id,viewer_id,subject_id,created_at) VALUES(?,?,?,?) ON CONFLICT(room_id,viewer_id) DO NOTHING",
+                [roomId, u.id, view.subjectId, iso()],
+              ),
+              auditStatement(env, u.id, "credits.peek", roomId, {
+                price,
+                revealsAsl: view.revealsAsl,
+                revealsPicture: view.revealsPicture,
+              }),
+            ]);
+            await this.enqueue("event", {
+              type: "room.changed",
+              roomId,
+              userIds: [u.id],
+            });
+            return {
+              purchased: true,
+              charged: price,
+              balance: wallet.balance - price,
+            };
+          }
+          case "credits.buy_slots": {
+            requireThat(u?.verified, 403, "Verify your email to use credits");
+            const cfg = await settings(env);
+            requireCredits(cfg);
+            const b = slotPurchaseSchema.parse(input),
+              key = `slots:${b.clientOperationId}`;
+            const wallet = await walletOf(env, u.id);
+            if (await entryExists(env, key))
+              return {
+                purchased: false,
+                extraContactSlots: wallet.extraContactSlots,
+                balance: wallet.balance,
+              };
+            requireThat(
+              cfg.credits_contact_slot_base +
+                wallet.extraContactSlots +
+                cfg.credits_contact_slot_pack <=
+                cfg.credits_contact_slot_max,
+              409,
+              "Contact storage is at its maximum",
+            );
+            requireThat(
+              wallet.balance >= cfg.credits_contact_slot_price,
+              402,
+              "Not enough credits",
+            );
+            await env.DB.batch([
+              ...spendStatements(
+                env,
+                u.id,
+                "SPEND_SLOTS",
+                cfg.credits_contact_slot_price,
+                key,
+                null,
+                [
+                  slotIncrementStatement(
+                    env,
+                    u.id,
+                    cfg.credits_contact_slot_pack,
+                    key,
+                  ),
+                ],
+              ),
+              auditStatement(env, u.id, "credits.buy_slots", u.id, {
+                slots: cfg.credits_contact_slot_pack,
+              }),
+            ]);
+            const after = await walletOf(env, u.id);
+            return {
+              purchased: true,
+              extraContactSlots: after.extraContactSlots,
+              balance: after.balance,
+            };
+          }
+          case "credits.order.create": {
+            requireThat(u?.verified, 403, "Verify your email to buy credits");
+            requireCredits(await settings(env));
+            const b = creditOrderSchema.parse({ packId: input.packId });
+            const pack = CREDIT_PACKS.find((p) => p.id === b.packId)!;
+            const id = crypto.randomUUID();
+            await run(
+              env,
+              "INSERT INTO credit_orders(id,user_id,provider,provider_reference,pack_id,credits,amount_minor,currency,state,created_at) VALUES(?,?,?,?,?,?,?,?,'PENDING',?)",
+              [
+                id,
+                u.id,
+                String(input.provider),
+                String(input.reference),
+                pack.id,
+                pack.credits,
+                pack.amountMinor,
+                pack.currency,
+                iso(),
+              ],
+            );
+            return { id, packId: pack.id };
+          }
+          case "credits.order.settle": {
+            // Internal: reached only from a verified provider webhook (no actor).
+            requireThat(!actor, 403, "Internal command only");
+            const order = await first(
+              env,
+              "SELECT * FROM credit_orders WHERE provider=? AND provider_reference=?",
+              [String(input.provider), String(input.reference)],
+            );
+            requireThat(order, 404, "Order unavailable");
+            // Replayed webhooks change nothing once an order has settled. A PAID
+            // event is authoritative money movement, so it still credits an order
+            // that expired or failed locally first; the topup entry key keeps it once.
+            if (
+              order.state === "PAID" ||
+              (order.state !== "PENDING" && input.state !== "PAID")
+            )
+              return { state: order.state };
+            if (input.state === "PAID")
+              await env.DB.batch([
+                ...grantStatements(
+                  env,
+                  order.user_id,
+                  "TOPUP",
+                  Number(order.credits),
+                  `topup:${order.provider}:${order.provider_reference}`,
+                  order.id,
+                ),
+                stmt(
+                  env,
+                  "UPDATE credit_orders SET state='PAID',settled_at=? WHERE id=? AND state<>'PAID'",
+                  [iso(), order.id],
+                ),
+              ]);
+            else
+              await run(
+                env,
+                "UPDATE credit_orders SET state='FAILED',settled_at=? WHERE id=? AND state='PENDING'",
+                [iso(), order.id],
+              );
+            return { state: input.state };
+          }
+          case "credits.grant": {
+            // Internal: activity rewards delivered from Room outbox jobs.
+            requireThat(!actor, 403, "Internal command only");
+            const cfg = await settings(env);
+            if (!cfg.credits_enabled) return null;
+            const reward = String(input.reward);
+            requireThat(reward === "activity", 400, "Unknown reward");
+            const amount = cfg.credits_activity_milestone_reward,
+              entryKey = String(input.entryKey);
+            // Guests have no wallet; the reward is skipped, not retried.
+            const target = await first(
+              env,
+              "SELECT verified FROM users WHERE id=?",
+              [String(input.userId)],
+            );
+            if (!target?.verified || amount <= 0) return null;
+            if (await entryExists(env, entryKey)) return null;
+            if (
+              (await activityGrantsToday(env, String(input.userId))) >=
+              ACTIVITY_REWARDS_PER_DAY
+            )
+              return null;
+            await env.DB.batch(
+              grantStatements(
+                env,
+                String(input.userId),
+                "GRANT_ACTIVITY",
+                amount,
+                entryKey,
+                input.reference ? String(input.reference) : null,
+              ),
+            );
+            return null;
+          }
           default:
             throw new Error("Unknown application command");
         }
@@ -827,12 +1213,26 @@ export class AppCoordinator extends DurableObject<Env> {
       ...extra,
     };
   }
+  // First-verification bonus. Empty while credits are disabled. The entry key makes repeats no-ops.
+  private async verifyBonus(id: string): Promise<D1PreparedStatement[]> {
+    const cfg = await settings(this.env);
+    if (!cfg.credits_enabled || cfg.credits_verify_bonus <= 0) return [];
+    return grantStatements(
+      this.env,
+      id,
+      "GRANT_VERIFY",
+      cfg.credits_verify_bonus,
+      `verify:${id}`,
+      null,
+    );
+  }
   private async create(
     record: RoomRecord,
     members: string[],
     invite: any,
     operationId = `room:${record.id}`,
     completion?: any,
+    extra: D1PreparedStatement[] = [],
   ) {
     const old = await first(
       this.env,
@@ -854,6 +1254,7 @@ export class AppCoordinator extends DurableObject<Env> {
           "INSERT INTO app_outbox(id,kind,payload,created_at) VALUES(?,?,?,?)",
           [operationId, "room.initialize", JSON.stringify(payload), iso()],
         ),
+        ...extra,
       ]);
     await this.ctx.storage.setAlarm(Date.now() + 1000);
     await this.deliverInternal(operationId);
@@ -1059,7 +1460,12 @@ export class AppCoordinator extends DurableObject<Env> {
   async alarm() {
     for (const r of await all(
       this.env,
-      "SELECT id FROM app_outbox ORDER BY created_at LIMIT 50",
+      "SELECT id FROM app_outbox WHERE created_at>? OR rowid % ? = ? ORDER BY created_at LIMIT 50",
+      [
+        iso(Date.now() - OUTBOX_FRESH_MS),
+        OUTBOX_REDRIVE_MINUTES,
+        outboxRedrivePhase(),
+      ],
     ))
       try {
         await this.env.JOBS.send({
@@ -1087,6 +1493,11 @@ export class AppCoordinator extends DurableObject<Env> {
         ]),
         stmt(env, "DELETE FROM email_tokens WHERE expires_at<=?", [iso()]),
         stmt(env, "DELETE FROM oauth_flows WHERE expires_at<=?", [iso()]),
+        stmt(
+          env,
+          "UPDATE credit_orders SET state='EXPIRED' WHERE state='PENDING' AND created_at<?",
+          [iso(Date.now() - 86400000)],
+        ),
         stmt(
           env,
           "UPDATE social_requests SET state='REJECTED' WHERE state='PENDING' AND expires_at<=? AND NOT EXISTS(SELECT 1 FROM operations WHERE id='request:'||social_requests.id AND state='PENDING')",

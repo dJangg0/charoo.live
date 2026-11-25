@@ -42,11 +42,11 @@ Use **Join a room** on the home screen or in the main navigation to paste a full
 
 Quick chat searches for up to two minutes, then cancels the queue if no match is available; you can start another search at any time. It provides **Next** in the chat header and member sidebar to leave the current conversation and find someone new. Retrying a stale blocked match queues a new conversation instead of failing.
 
-After **five qualifying messages from each person**, quick chat reveals the ASL fields allowed by each person's privacy settings. After **ten each**, both see that profile-picture sharing is available. Each person independently chooses **Show my profile picture** or **Not now**; declining keeps a share-later action available in that chat. Pictures remain private until their owner approves. A new match starts with fresh progress and consent. Qualifying messages must be distinct and meaningful; rapid/repeated messages and retries do not inflate progress.
+Quick chat shows word progress for both participants. After **ten words each**, each participant sees the other person’s permitted ASL under their name in the left room sidebar, subject to that person’s privacy settings. After **twenty words each**, each picture owner can choose **Show my profile picture** or **Not now**. Short and rapid messages count. Repeated copies of the same message count once per person. Declining keeps the option available in the same chat. A new match starts with fresh progress and consent.
 
 Click the photo/avatar in the top card on **Your profile** to add or replace a private picture (JPEG, PNG or WebP, up to 5 MB). You can change it again anytime. Edit **Bio** in the profile form (up to 300 characters), then select **Save profile**; the saved bio appears in your own profile card. Profile-photo uploads use the existing authenticated backend and private R2 storage, with server-side file-format and size checks; no scanner configuration is needed. Replacing a picture never shares the replacement under an earlier consent. Apply the additive `0005_profile_pictures.sql` D1 migration before deploying this feature; the legacy ASL threshold/duration settings no longer control quick-chat milestones.
 
-Inside a room, the left sidebar shows members, invitation tools, and host controls. Back restores the main navigation; on mobile, the Members button opens the same sidebar. Hosts can mute members for 30 minutes or unmute them immediately. Muted members can read but cannot send messages, reactions, or attachments. Block/Unblock hides or restores a person's messages for the user who clicks it and stops private interactions.
+Inside a room, the left sidebar shows members, invitation tools, and host controls. Back restores the main navigation; on mobile, the Members button opens the same sidebar. Hosts can mute members for 30 minutes or unmute them immediately. Muted members can read but cannot send messages, reactions, or attachments. Block/Unblock hides or restores a person's messages for the user who clicks it and stops private interactions. If you block a shared room's host, or the host blocks you, you cannot join or stay in that room.
 
 Appearance is available from the top bar's palette button and the main sidebar, including before sign-in. Choose Pop, Fern, Sunshine, Lavender, Ocean, Mint, Rose, Amber or Slate; switch between light, dark and device appearance; or pick custom accent and background colors. Panels and text adapt across the app, including rooms and dialogs. Changes apply immediately and persist in this browser, with separate custom colors for light and dark appearances. Reset to default restores Charoo's light Pop theme with a warm paper background and bright yellow accents.
 
@@ -150,7 +150,7 @@ The assistant sends a bounded style prompt without conversation history. LiveKit
 
 ## Cloudflare deployment
 
-`wrangler.cloudflare.jsonc` deploys the `charoo-live` Worker with its Durable Objects to Cloudflare, using the existing `charoo-d1-db` D1 database and `charoo-media` R2 bucket. The browser origin is **https://charoo-live.shy-star-eff8.workers.dev**; `vars.WEB_ORIGIN` must match it exactly. This configuration is separate from local Celld development and the fleet deployment below.
+`wrangler.cloudflare.jsonc` deploys the `charoo-live` Worker with its Durable Objects to Cloudflare, using the existing `charoo-d1-db` D1 database and `charoo-media` R2 bucket. Its intended production browser origin is **https://chat.charoo.live**, and `vars.WEB_ORIGIN` is set to that exact origin. Configure `chat.charoo.live` as a custom domain for this Worker in Cloudflare. This configuration is separate from local Celld development and the fleet deployment below.
 
 ### Pull request previews
 
@@ -170,10 +170,18 @@ The staging resources are provisioned in the configured Cloudflare account. Appl
 pnpm run db:migrate:cloudflare:staging
 pnpm run deploy:cloudflare:staging:dry-run
 pnpm build:cloudflare:staging
-pnpm exec wrangler deploy --config wrangler.staging.jsonc --secrets-file .secrets.cloudflare.staging.json
+pnpm run deploy:cloudflare:staging --secrets-file .secrets.cloudflare.staging.json
 ```
 
 Later staging deployments can use `pnpm run deploy:cloudflare:staging`. Provider integrations remain unavailable until their staging credentials and nonsecret settings are configured. Use staging data only; the current implementation review lists open access-control findings.
+
+### Branch promotion and CI
+
+GitHub Actions runs the `Check` workflow for pushes to `staging` and `main`, and pull requests targeting either branch. The workflow runs application checks and a Celld dry run; it does not deploy either Cloudflare Worker.
+
+For Cloudflare Workers Builds, set the production Worker's production branch to `main` and the staging Worker's production branch to `staging`. Set each Worker's deploy command to its matching script: `pnpm run deploy:cloudflare` for production and `pnpm run deploy:cloudflare:staging` for staging. Those scripts select the corresponding Wrangler configuration and resource set, and refuse to publish unless the build branch matches the target (`main` for production, `staging` for staging). Workers Builds supplies the branch through `WORKERS_CI_BRANCH`; local deploys use the checked-out Git branch. The guard fails closed if it cannot identify the build branch. Do not use a raw `wrangler deploy` command in Workers Builds: it bypasses this branch check.
+
+For strict isolation, turn off **Enable Preview Builds** in the production Worker's **Settings → Builds → Branch control**. Otherwise, Cloudflare can run a preview build for a push to `staging`; a preview does not replace the active production deployment, but it can still appear as a production Worker build/check. Turn previews off for staging too if it should build only from `staging`. With automatic deployment enabled, pushing to `staging` updates staging and merging into `main` is the production promotion action. To deploy production manually after testing, disable automatic deployment for the production Worker and run `pnpm run deploy:cloudflare` yourself.
 
 `pnpm run build:cloudflare` uses the public production settings from that configuration for the generated security headers, including LiveKit connection origins when configured. The secrets file is only passed to Wrangler for upload.
 
@@ -214,6 +222,8 @@ Hosting provisioning and publishing are separate from this migration. Use an exi
    ```
 
 5. Publishing, when authorized, uses the same command without `--dry-run`. Startup waits for the expected D1 migration records. Keep the Worker name, `ROOM`/`Room` binding, and existing `v1` migration. New classes are introduced by `v2`; future migrations must be appended.
+
+   Migrations `0005_profile_pictures.sql` and `0006_credits.sql` are required before production traffic. `0006` adds the credit wallet, the append-only ledger, purchase orders and quick-chat peeks. Credits stay disabled until an admin enables `credits_enabled`. The payment sandbox is never available in production, and `CREDITS_WEBHOOK_SECRET` is a Worker secret, not a `vars` entry.
 6. After the operator's account verifies its email, grant its staff role through native D1:
 
    ```sh

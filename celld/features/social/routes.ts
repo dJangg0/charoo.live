@@ -1,6 +1,14 @@
 import type { Hono } from "hono";
 import { z, requestSchema, reportSchema } from "@charoo/contracts";
-import { all, run, coordinator, roomStub, iso } from "../../shared/data";
+import {
+  all,
+  run,
+  coordinator,
+  roomStub,
+  settings,
+  iso,
+} from "../../shared/data";
+import { reconnectPrice } from "../credits/wallet";
 import { requireThat, unwrap } from "../../shared/errors";
 import { actor, body, uuid, userRate, type HttpEnv } from "../../http/context";
 
@@ -73,15 +81,41 @@ export function socialRoutes(app: Hono<HttpEnv>) {
       );
     },
   );
-  app.get("/api/requests", async (c) =>
-    c.json(
-      await all(
-        c.env,
-        `SELECT s.*,u.display_name FROM social_requests s JOIN users u ON u.id=s.requester_id WHERE s.target_id=? AND s.state='PENDING' AND s.expires_at>? ORDER BY s.created_at DESC`,
-        [actor(c).userId, iso()],
+  app.get("/api/requests", async (c) => {
+    const rows = await all(
+      c.env,
+      `SELECT s.*,u.display_name FROM social_requests s JOIN users u ON u.id=s.requester_id WHERE s.target_id=? AND s.state='PENDING' AND s.expires_at>? ORDER BY s.created_at DESC`,
+      [actor(c).userId, iso()],
+    );
+    // Reconnect price and whether the requester can pay it when accepted.
+    const price = reconnectPrice(await settings(c.env));
+    // One balance lookup for every reconnect requester; skipped while reconnect is free.
+    const requesterIds = [
+      ...new Set(
+        rows.filter((r) => r.kind === "RECONNECT").map((r) => r.requester_id),
       ),
-    ),
-  );
+    ];
+    const balances = new Map<string, number>();
+    if (price > 0 && requesterIds.length)
+      for (const w of await all(
+        c.env,
+        `SELECT user_id,balance FROM credit_wallets WHERE user_id IN (${requesterIds.map(() => "?").join(",")})`,
+        requesterIds,
+      ))
+        balances.set(w.user_id, Number(w.balance));
+    return c.json(
+      rows.map((row) =>
+        row.kind === "RECONNECT"
+          ? {
+              ...row,
+              reconnect_price: price,
+              requester_can_afford:
+                price === 0 || (balances.get(row.requester_id) ?? 0) >= price,
+            }
+          : row,
+      ),
+    );
+  });
   app.post("/api/requests", body(requestSchema), async (c) => {
     await userRate(c, "request", 10, 3600, "Request limit reached");
     return c.json(
@@ -131,8 +165,18 @@ export function socialRoutes(app: Hono<HttpEnv>) {
     return c.json(
       await all(
         c.env,
-        `SELECT a.room_id AS archive_id,u.id,u.display_name,a.last_chatted_at,a.archived_at,a.expires_at,u.verified AS reconnectable FROM quick_chat_archives a JOIN users u ON u.id=a.peer_id WHERE a.user_id=? AND a.expires_at>? AND u.banned=0 AND (u.suspended_until IS NULL OR u.suspended_until<=?) AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=? AND b.target_id=u.id) OR (b.target_id=? AND b.user_id=u.id)) ORDER BY a.archived_at DESC`,
-        [id, iso(), iso(), id, id],
+        `SELECT a.room_id AS archive_id,u.id,u.display_name,a.last_chatted_at,a.archived_at,a.expires_at,u.verified AS reconnectable,
+          EXISTS(
+            SELECT 1 FROM social_requests s
+            WHERE s.requester_id=a.user_id AND s.target_id=a.peer_id
+              AND s.kind='RECONNECT' AND s.state='PENDING' AND s.expires_at>?
+          ) AS reconnect_pending
+        FROM quick_chat_archives a JOIN users u ON u.id=a.peer_id
+        WHERE a.user_id=? AND a.expires_at>? AND u.banned=0
+          AND (u.suspended_until IS NULL OR u.suspended_until<=?)
+          AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=? AND b.target_id=u.id) OR (b.target_id=? AND b.user_id=u.id))
+        ORDER BY a.archived_at DESC`,
+        [iso(), id, iso(), iso(), id, id],
       ),
     );
   });

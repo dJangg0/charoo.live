@@ -36,6 +36,36 @@ async function identity(browser: Browser, verified = false, role = "USER") {
   await api("/presence", "POST", { status: "Online" });
   return { context, session, api };
 }
+
+// Quick-chat matching requires an approved profile picture; upload through the real HTTP routes.
+const pngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAI0lEQVR4AYTIMQ0AAAwCwQYrNVYpdQ4rYeGTXw77Rx8TdRAAAAD//ztpTTIAAAAGSURBVAMA2psIEaykz3gAAAAASUVORK5CYII=";
+async function withPicture(who: Awaited<ReturnType<typeof identity>>) {
+  const png = Buffer.from(pngBase64, "base64");
+  const init = await who.api("/profile/picture/init", "POST", {
+    mime: "image/png",
+    size: png.length,
+  });
+  expect(init.status()).toBe(201);
+  const picture = await init.json();
+  const put = await who.context.request.put(`${base}${picture.url}`, {
+    headers: {
+      "Content-Type": "image/png",
+      Origin: base,
+      "X-CSRF-Token": who.session.csrf,
+    },
+    data: png,
+  });
+  if (!put.ok())
+    throw new Error(`picture upload ${put.status()}: ${await put.text()}`);
+  const complete = await who.api(
+    `/profile/picture/${picture.id}/complete`,
+    "POST",
+    {},
+  );
+  expect(complete.ok()).toBe(true);
+  return who;
+}
 async function group(
   u: Awaited<ReturnType<typeof identity>>,
   title = "Native group",
@@ -300,9 +330,9 @@ test("Google cancellation preserves browser binding, PKCE and invitation navigat
 test("concurrent room limits, matching, cancellation and contact acceptance", async ({
   browser,
 }) => {
-  const a = await identity(browser, true),
-    b = await identity(browser, true),
-    waiting = await identity(browser, true);
+  const a = await withPicture(await identity(browser, true)),
+    b = await withPicture(await identity(browser, true)),
+    waiting = await withPicture(await identity(browser, true));
   try {
     const creations = await Promise.all(
       Array.from({ length: 6 }, () =>
@@ -319,6 +349,43 @@ test("concurrent room limits, matching, cancellation and contact acceptance", as
     );
     const matched = await (await b.api("/match", "POST", {})).json();
     expect(matched.roomId).toBeTruthy();
+    const roomPath = `/rooms/${matched.roomId}`;
+    const send = async (member: typeof a, text: string) => {
+      expect(
+        (
+          await member.api(`${roomPath}/messages`, "POST", {
+            text,
+            clientMessageId: crypto.randomUUID(),
+          })
+        ).status(),
+      ).toBe(201);
+    };
+    await send(a, "One two three four five six seven eight nine ten");
+    await send(b, "A B C D E F G H I");
+    const locked = await (await a.api(roomPath)).json();
+    expect(
+      locked.aslProgress
+        .map((person: { count: number }) => person.count)
+        .sort(),
+    ).toEqual([10, 9]);
+    expect(locked.asl_revealed).toBe(false);
+    expect(locked.pictureReveal.eligible).toBe(false);
+    await send(b, "J");
+    const unlocked = await (await b.api(roomPath)).json();
+    expect(unlocked.asl_revealed).toBe(true);
+    // Words unlock ASL; the profile reveal needs ten distinct messages each.
+    expect(unlocked.pictureReveal.eligible).toBe(false);
+    expect(unlocked.pictureReveal.participants).toEqual([]);
+    // Each participant reaches ten distinct letter-bearing messages.
+    for (let i = 0; i < 9; i++) await send(a, `alpha note ${i}`);
+    for (let i = 0; i < 8; i++) await send(b, `bravo note ${i}`);
+    const pictureReady = await (await b.api(roomPath)).json();
+    expect(
+      pictureReady.pictureProgress
+        .map((p: { count: number }) => p.count)
+        .sort(),
+    ).toEqual([10, 10]);
+    expect(pictureReady.pictureReveal.eligible).toBe(true);
     const request = await (
       await a.api("/requests", "POST", {
         kind: "CONTACT",
@@ -422,8 +489,8 @@ test("R2 quarantine, scanning retries, scoped URLs and authenticated downloads",
 test("call consent, AI privacy, reports, audited evidence and staff permissions", async ({
   browser,
 }) => {
-  const a = await identity(browser, true),
-    b = await identity(browser, true),
+  const a = await withPicture(await identity(browser, true)),
+    b = await withPicture(await identity(browser, true)),
     admin = await identity(browser, true, "ADMIN"),
     support = await identity(browser, true, "SUPPORT");
   try {
